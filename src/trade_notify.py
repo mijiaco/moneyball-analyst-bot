@@ -191,7 +191,7 @@ def env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
-async def dry_run(apply_dedupe: bool) -> int:
+async def dry_run(apply_dedupe: bool, *, last_trade_only: bool = False) -> int:
     load_dotenv()
     host = os.environ.get("MFL_HOST", "www45.myfantasyleague.com")
     year = os.environ.get("MFL_YEAR", "2026")
@@ -227,6 +227,23 @@ async def dry_run(apply_dedupe: bool) -> int:
 
     franchise_names = franchise_names_from_league(league_json)
     now = time.time()
+
+    if last_trade_only:
+        trades_only = [tx for tx in transactions if tx.get("type") == "TRADE"]
+        if not trades_only:
+            print("(dry-run: no TRADE rows in lookback window)", file=sys.stderr)
+            return 0
+        trades_only.sort(key=lambda t: trade_submitted_unix(t) or 0.0)
+        tx = trades_only[-1]
+        print(format_trade_text(tx, franchise_names, players, season_year))
+        pending = not is_processed_trade(tx, now)
+        phase = "pending veto window" if pending else "processed"
+        print(
+            f"(dry-run: latest trade by MFL timestamp — {phase}; not posted, seen unchanged)",
+            file=sys.stderr,
+        )
+        return 0
+
     new_count = 0
     seeded = 0
     for tx in transactions:
@@ -269,9 +286,23 @@ def main() -> None:
         action="store_true",
         help="With --dry-run, skip fingerprints already in data/seen_trades.json and update it.",
     )
+    parser.add_argument(
+        "--last-trade",
+        action="store_true",
+        help="With --dry-run, print only the newest TRADE in the lookback (format/API check).",
+    )
     args = parser.parse_args()
     if args.dry_run:
-        raise SystemExit(asyncio.run(dry_run(apply_dedupe=args.with_dedupe)))
+        if args.last_trade and args.with_dedupe:
+            parser.error("--last-trade cannot be used with --with-dedupe")
+        raise SystemExit(
+            asyncio.run(
+                dry_run(
+                    apply_dedupe=args.with_dedupe,
+                    last_trade_only=args.last_trade,
+                )
+            )
+        )
     parser.print_help()
     raise SystemExit(1)
 
