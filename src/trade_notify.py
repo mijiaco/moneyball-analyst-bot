@@ -60,6 +60,37 @@ def trade_notification_key_variants(tx: dict[str, Any], now_unix: float) -> tupl
     return (base, f"{base}|P", f"{base}|C")
 
 
+def trade_bait_notification_key(tb: dict[str, Any]) -> str:
+    parts = [
+        str(tb.get("franchise_id", "")),
+        str(tb.get("timestamp", "")),
+        str(tb.get("willGiveUp", "")),
+        str(tb.get("inExchangeFor", "")).strip(),
+    ]
+    return "TB|" + "|".join(parts)
+
+
+def trade_bait_updated_unix(tb: dict[str, Any]) -> float | None:
+    raw = tb.get("timestamp")
+    if raw is None or raw == "":
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def is_trade_bait_too_old_to_announce(
+    tb: dict[str, Any], now_unix: float, max_age_hours: float
+) -> bool:
+    if max_age_hours <= 0:
+        return False
+    ts = trade_bait_updated_unix(tb)
+    if ts is None:
+        return False
+    return (now_unix - ts) > max_age_hours * 3600.0
+
+
 def trade_submitted_unix(tx: dict[str, Any]) -> float | None:
     raw = tx.get("timestamp")
     if raw is None or raw == "":
@@ -242,6 +273,32 @@ def format_trade_text(
         safe = comments.replace("`", "'")[:500]
         header += f"\n_Comments:_ {safe}"
     return header
+
+
+def format_trade_bait_text(
+    tb: dict[str, Any],
+    franchise_names: dict[str, str],
+    players: dict[str, str],
+    season_year: int,
+    salaries_by_franchise: dict[str, dict[str, str]] | None = None,
+) -> str:
+    salaries = salaries_by_franchise if salaries_by_franchise is not None else {}
+    fid = str(tb.get("franchise_id", ""))
+    team_name = franchise_names.get(fid, f"Franchise {fid}")
+    give_up = format_asset_list(
+        tb.get("willGiveUp"),
+        players,
+        season_year,
+        franchise_names,
+        fid,
+        salaries,
+    )
+    wants = (tb.get("inExchangeFor") or "").strip()
+    body = f"**{team_name}** is offering:\n{give_up}"
+    if wants:
+        safe_wants = wants.replace("`", "'")[:500]
+        body += f"\n**Looking for:**\n* {safe_wants}"
+    return body
 
 
 def load_seen(path: Path) -> set[str]:

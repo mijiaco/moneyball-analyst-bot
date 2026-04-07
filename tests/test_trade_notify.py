@@ -8,13 +8,16 @@ import time
 from pathlib import Path
 
 from src.trade_notify import (
+    format_trade_bait_text,
     format_draft_token,
     format_future_pick_token,
     format_trade_text,
+    is_trade_bait_too_old_to_announce,
     is_processed_trade,
     is_trade_too_old_to_announce,
     load_seen,
     save_seen,
+    trade_bait_notification_key,
     trade_fingerprint,
     trade_notification_key,
     trade_notification_key_variants,
@@ -58,6 +61,25 @@ def test_trade_notification_key_variants_include_legacy_suffixes() -> None:
     base, key_p, key_c = trade_notification_key_variants(tx, now)
     assert key_p == f"{base}|P"
     assert key_c == f"{base}|C"
+
+
+def test_trade_bait_notification_key_stable() -> None:
+    tb = {
+        "franchise_id": "0007",
+        "timestamp": "1775583753",
+        "willGiveUp": "16644",
+        "inExchangeFor": "Trading for picks",
+    }
+    key = trade_bait_notification_key(tb)
+    assert key.startswith("TB|0007|1775583753|16644|")
+    assert "Trading for picks" in key
+
+
+def test_trade_bait_age_gate() -> None:
+    now = 1_000_000.0
+    tb = {"timestamp": str(int(now - 90_000))}
+    assert is_trade_bait_too_old_to_announce(tb, now, 24) is True
+    assert is_trade_bait_too_old_to_announce(tb, now, 0) is False
 
 
 def test_is_trade_too_old_to_announce() -> None:
@@ -139,6 +161,23 @@ def test_format_trade_text_salary_fallback_across_franchises() -> None:
     salaries = {"0013": {"15797": "22"}}
     text = format_trade_text(tx, franchises, players, 2026, salaries)
     assert "* Dulcich, Greg MIA TE ($22)" in text
+
+
+def test_format_trade_bait_text_bullets_and_salary() -> None:
+    tb = {
+        "franchise_id": "0009",
+        "willGiveUp": "16257,DP_0_21,",
+        "inExchangeFor": "2027 picks",
+    }
+    franchises = {"0009": "Team A"}
+    players = {"16257": "Greenard, Jonathan MIN DE"}
+    salaries = {"0009": {"16257": "35"}}
+    text = format_trade_bait_text(tb, franchises, players, 2026, salaries)
+    assert "**Team A** is offering:" in text
+    assert "* Greenard, Jonathan MIN DE ($35)" in text
+    assert "* 2026 draft R1.22" in text
+    assert "**Looking for:**" in text
+    assert "* 2027 picks" in text
 
 
 def test_load_save_seen_roundtrip() -> None:

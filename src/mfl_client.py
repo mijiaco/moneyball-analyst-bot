@@ -91,6 +91,11 @@ class MflClient:
         data = await self._get_json({"TYPE": "rosters"})
         return data if isinstance(data, dict) else {}
 
+    async def fetch_trade_baits(self) -> list[dict[str, Any]]:
+        data = await self._get_json({"TYPE": "tradeBait"})
+        block = data.get("tradeBaits") or {}
+        return _normalize_transaction_list(block.get("tradeBait"))
+
     async def _fetch_players_live(self) -> dict[str, Any]:
         data = await self._get_json({"TYPE": "players"})
         return data if isinstance(data, dict) else {}

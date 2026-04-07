@@ -77,6 +77,7 @@ async def _async_main() -> int:
     announce_max_age = float(os.environ.get("MFL_ANNOUNCE_MAX_AGE_HOURS", "48"))
     announce_pending = env_bool("MFL_ANNOUNCE_PENDING_TRADES", True)
     notify_once_per_trade = env_bool("MFL_NOTIFY_ONCE_PER_TRADE", True)
+    announce_trade_bait = env_bool("MFL_ANNOUNCE_TRADE_BAIT", True)
     season_year = int(os.environ.get("MFL_YEAR", "2026"))
 
     mfl = MflClient(
@@ -96,6 +97,7 @@ async def _async_main() -> int:
             announce_max_age_hours=announce_max_age,
             season_year=season_year,
             notify_once_per_trade=notify_once_per_trade,
+            announce_trade_bait=announce_trade_bait,
         )
     except httpx.HTTPStatusError as exc:
         logger.exception("MFL HTTP error: %s", exc)

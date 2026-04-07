@@ -55,6 +55,7 @@ class TradeBot(discord.Client):
         )
         self._announce_pending = env_bool("MFL_ANNOUNCE_PENDING_TRADES", True)
         self._notify_once_per_trade = env_bool("MFL_NOTIFY_ONCE_PER_TRADE", True)
+        self._announce_trade_bait = env_bool("MFL_ANNOUNCE_TRADE_BAIT", True)
 
     async def setup_hook(self) -> None:
         self._mfl = MflClient(
@@ -108,6 +109,7 @@ class TradeBot(discord.Client):
                 announce_max_age_hours=self._announce_max_age_hours,
                 season_year=self._season_year,
                 notify_once_per_trade=self._notify_once_per_trade,
+                announce_trade_bait=self._announce_trade_bait,
             )
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 429:

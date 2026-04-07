@@ -12,9 +12,12 @@ from src.mfl_client import (
     player_salaries_by_franchise,
 )
 from src.trade_notify import (
+    format_trade_bait_text,
     format_trade_text,
+    is_trade_bait_too_old_to_announce,
     is_processed_trade,
     is_trade_too_old_to_announce,
+    trade_bait_notification_key,
     trade_notification_key,
     trade_notification_key_variants,
 )
@@ -22,6 +25,8 @@ from src.trade_notify import (
 DISCORD_DESCRIPTION_LIMIT = 4096
 _TRADE_EMBED_COLOR = discord.Color.dark_green().value
 _TRADE_EMBED_TITLE = "Trade"
+_TRADE_BAIT_EMBED_COLOR = discord.Color.blurple().value
+_TRADE_BAIT_EMBED_TITLE = "Trade bait update"
 
 
 class TradeMessagePayload:
@@ -42,6 +47,7 @@ async def poll_trades_for_new_messages(
     announce_max_age_hours: float,
     season_year: int,
     notify_once_per_trade: bool,
+    announce_trade_bait: bool,
 ) -> tuple[list[tuple[str, TradeMessagePayload]], bool]:
     """
     Fetch MFL. Mutates seen only for old-trade silent seeds.
@@ -49,6 +55,8 @@ async def poll_trades_for_new_messages(
     Caller must add keys to seen after each successful Discord post.
     """
     transactions = await mfl.fetch_transactions_trade_days(lookback_days)
+    await mfl.sleep_between_exports()
+    trade_baits = await mfl.fetch_trade_baits()
     await mfl.sleep_between_exports()
     league_json = await mfl.fetch_league()
     await mfl.sleep_between_exports()
@@ -85,5 +93,23 @@ async def poll_trades_for_new_messages(
         if len(body) > DISCORD_DESCRIPTION_LIMIT:
             body = body[: DISCORD_DESCRIPTION_LIMIT - 3] + "..."
         out.append((key, TradeMessagePayload(_TRADE_EMBED_TITLE, body, _TRADE_EMBED_COLOR)))
+
+    if announce_trade_bait:
+        for tb in trade_baits:
+            key = trade_bait_notification_key(tb)
+            if key in seen:
+                continue
+            if is_trade_bait_too_old_to_announce(tb, now, announce_max_age_hours):
+                seen.add(key)
+                updated = True
+                continue
+            body = format_trade_bait_text(
+                tb, franchise_names, players, season_year, salaries_by_franchise
+            )
+            if len(body) > DISCORD_DESCRIPTION_LIMIT:
+                body = body[: DISCORD_DESCRIPTION_LIMIT - 3] + "..."
+            out.append(
+                (key, TradeMessagePayload(_TRADE_BAIT_EMBED_TITLE, body, _TRADE_BAIT_EMBED_COLOR))
+            )
 
     return out, updated
