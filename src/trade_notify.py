@@ -118,6 +118,27 @@ def _salary_for_player_on_franchise(
     for k, v in fr_map.items():
         if k.isdigit() and int(k) == want:
             return v
+    # Fallback: some MFL rows do not align player asset side with current
+    # sender roster; if this player has a unique salary league-wide, use it.
+    found_salary: str | None = None
+    for other_fr_map in salaries_by_franchise.values():
+        if player_token in other_fr_map:
+            salary = other_fr_map[player_token]
+        else:
+            salary = None
+            for k, v in other_fr_map.items():
+                if k.isdigit() and int(k) == want:
+                    salary = v
+                    break
+        if salary is None:
+            continue
+        if found_salary is None:
+            found_salary = salary
+            continue
+        if salary != found_salary:
+            return None
+    if found_salary is not None:
+        return found_salary
     return None
 
 

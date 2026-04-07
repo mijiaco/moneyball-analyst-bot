@@ -111,6 +111,20 @@ def test_format_trade_text_player_salary_bullets() -> None:
     assert "* 2026 draft R4.14" in text
 
 
+def test_format_trade_text_salary_fallback_across_franchises() -> None:
+    tx = {
+        "franchise": "0013",
+        "franchise2": "0021",
+        "franchise1_gave_up": "",
+        "franchise2_gave_up": "15797,",
+    }
+    franchises = {"0013": "Gallica White Ermines", "0021": "#NAME?"}
+    players = {"15797": "Dulcich, Greg MIA TE"}
+    salaries = {"0013": {"15797": "22"}}
+    text = format_trade_text(tx, franchises, players, 2026, salaries)
+    assert "* Dulcich, Greg MIA TE ($22)" in text
+
+
 def test_load_save_seen_roundtrip() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "seen.json"
