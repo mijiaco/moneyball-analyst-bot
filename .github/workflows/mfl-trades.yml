@@ -15,8 +15,22 @@ concurrency:
 jobs:
   poll:
     runs-on: ubuntu-latest
+    env:
+      DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+      DISCORD_CHANNEL_ID: ${{ secrets.DISCORD_CHANNEL_ID }}
+      MFL_API_KEY: ${{ secrets.MFL_API_KEY }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Require repository secrets
+        run: |
+          set -e
+          for var in DISCORD_BOT_TOKEN DISCORD_CHANNEL_ID MFL_API_KEY; do
+            if [ -z "${!var}" ]; then
+              echo "::error::Missing Actions secret '$var'. Repo → Settings → Secrets and variables → Actions → New repository secret (name must match exactly)."
+              exit 1
+            fi
+          done
 
       - uses: actions/setup-python@v5
         with:
@@ -35,10 +49,6 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Poll and post trades
-        env:
-          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
-          DISCORD_CHANNEL_ID: ${{ secrets.DISCORD_CHANNEL_ID }}
-          MFL_API_KEY: ${{ secrets.MFL_API_KEY }}
         run: python -m src.run_once
 
       - name: Commit seen-trades state

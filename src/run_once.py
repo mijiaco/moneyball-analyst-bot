@@ -58,7 +58,14 @@ async def _async_main() -> int:
     token = os.environ.get("DISCORD_BOT_TOKEN")
     channel_id = os.environ.get("DISCORD_CHANNEL_ID")
     if not token or not channel_id:
-        logger.error("DISCORD_BOT_TOKEN and DISCORD_CHANNEL_ID are required")
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            logger.error(
+                "DISCORD_BOT_TOKEN and/or DISCORD_CHANNEL_ID are empty. "
+                "Add them as repository secrets: Settings → Secrets and variables → Actions "
+                "(names DISCORD_BOT_TOKEN and DISCORD_CHANNEL_ID must match exactly)."
+            )
+        else:
+            logger.error("DISCORD_BOT_TOKEN and DISCORD_CHANNEL_ID are required (e.g. in .env)")
         return 1
 
     data_dir = Path(__file__).resolve().parent.parent / "data"
