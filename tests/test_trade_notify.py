@@ -86,12 +86,29 @@ def test_format_trade_text() -> None:
     franchises = {"0009": "Team A", "0024": "Team B"}
     players = {"16257": "Felix Anudike-Uzomah KCC DE"}
     text = format_trade_text(tx, franchises, players, 2026)
-    assert "Team A" in text
-    assert "Team B" in text
-    assert "Felix" in text
-    assert "2026 draft R1.22" in text
-    assert "2026 draft R2.03" in text
+    assert "**Team A** sends:" in text
+    assert "**Team B** sends:" in text
+    assert "* Felix" in text
+    assert "* 2026 draft R1.22" in text
+    assert "* 2026 draft R2.03" in text
     assert "note" in text
+
+
+def test_format_trade_text_player_salary_bullets() -> None:
+    tx = {
+        "franchise": "0009",
+        "franchise2": "0024",
+        "franchise1_gave_up": "16257,DP_0_15,",
+        "franchise2_gave_up": "DP_1_2,DP_3_13,",
+    }
+    franchises = {"0009": "Brute Force", "0024": "Chalupa Batmen"}
+    players = {"16257": "Greenard, Jonathan MIN DE"}
+    salaries = {"0009": {"16257": "35"}}
+    text = format_trade_text(tx, franchises, players, 2026, salaries)
+    assert "* Greenard, Jonathan MIN DE ($35)" in text
+    assert "* 2026 draft R1.16" in text
+    assert "* 2026 draft R2.03" in text
+    assert "* 2026 draft R4.14" in text
 
 
 def test_load_save_seen_roundtrip() -> None:

@@ -6,7 +6,11 @@ import time
 from typing import Any
 
 import discord
-from src.mfl_client import MflClient, franchise_names_from_league
+from src.mfl_client import (
+    MflClient,
+    franchise_names_from_league,
+    player_salaries_by_franchise,
+)
 from src.trade_notify import (
     format_trade_text,
     is_processed_trade,
@@ -47,6 +51,9 @@ async def poll_trades_for_new_messages(
     league_json = await mfl.fetch_league()
     await mfl.sleep_between_exports()
     players = await mfl.get_players_map()
+    await mfl.sleep_between_exports()
+    rosters_json = await mfl.fetch_rosters()
+    salaries_by_franchise = player_salaries_by_franchise(rosters_json)
 
     franchise_names = franchise_names_from_league(league_json)
     now = time.time()
@@ -65,7 +72,9 @@ async def poll_trades_for_new_messages(
             seen.add(key)
             updated = True
             continue
-        body = format_trade_text(tx, franchise_names, players, season_year)
+        body = format_trade_text(
+            tx, franchise_names, players, season_year, salaries_by_franchise
+        )
         if len(body) > DISCORD_DESCRIPTION_LIMIT:
             body = body[: DISCORD_DESCRIPTION_LIMIT - 3] + "..."
         out.append((key, TradeMessagePayload(_TRADE_EMBED_TITLE, body, _TRADE_EMBED_COLOR)))

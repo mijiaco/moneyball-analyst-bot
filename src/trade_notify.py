@@ -13,7 +13,11 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-from src.mfl_client import MflClient, franchise_names_from_league
+from src.mfl_client import (
+    MflClient,
+    franchise_names_from_league,
+    player_salaries_by_franchise,
+)
 
 
 def trade_fingerprint(tx: dict[str, Any]) -> str:
@@ -100,6 +104,23 @@ def format_future_pick_token(token: str, franchise_names: dict[str, str]) -> str
     return f"{year} R{rnd} (from {team})"
 
 
+def _salary_for_player_on_franchise(
+    salaries_by_franchise: dict[str, dict[str, str]],
+    franchise_id: str,
+    player_token: str,
+) -> str | None:
+    fr_map = salaries_by_franchise.get(franchise_id) or {}
+    if player_token in fr_map:
+        return fr_map[player_token]
+    if not player_token.isdigit():
+        return None
+    want = int(player_token)
+    for k, v in fr_map.items():
+        if k.isdigit() and int(k) == want:
+            return v
+    return None
+
+
 def format_draft_token(token: str, season_year: int) -> str:
     """
     MFL draft pick tokens use zero-based round and pick in DP_r_p
@@ -126,10 +147,12 @@ def format_asset_list(
     players: dict[str, str],
     season_year: int,
     franchise_names: dict[str, str],
+    sending_franchise_id: str,
+    salaries_by_franchise: dict[str, dict[str, str]],
 ) -> str:
     tokens = _split_gave_up(gave_up)
     if not tokens:
-        return "(nothing listed)"
+        return "* (nothing listed)"
     lines: list[str] = []
     for t in tokens:
         if t.startswith("DP_"):
@@ -137,8 +160,14 @@ def format_asset_list(
         elif t.startswith("FP_"):
             lines.append(format_future_pick_token(t, franchise_names))
         else:
-            lines.append(players.get(t, f"Player id {t}"))
-    return "; ".join(lines)
+            label = players.get(t, f"Player id {t}")
+            sal = _salary_for_player_on_franchise(
+                salaries_by_franchise, sending_franchise_id, t
+            )
+            if sal is not None:
+                label = f"{label} (${sal})"
+            lines.append(label)
+    return "\n".join(f"* {line}" for line in lines)
 
 
 def format_trade_text(
@@ -146,19 +175,31 @@ def format_trade_text(
     franchise_names: dict[str, str],
     players: dict[str, str],
     season_year: int,
+    salaries_by_franchise: dict[str, dict[str, str]] | None = None,
 ) -> str:
+    salaries = salaries_by_franchise if salaries_by_franchise is not None else {}
     f1 = str(tx.get("franchise", ""))
     f2 = str(tx.get("franchise2", ""))
     name1 = franchise_names.get(f1, f"Franchise {f1}")
     name2 = franchise_names.get(f2, f"Franchise {f2}")
     side1 = format_asset_list(
-        tx.get("franchise1_gave_up"), players, season_year, franchise_names
+        tx.get("franchise1_gave_up"),
+        players,
+        season_year,
+        franchise_names,
+        f1,
+        salaries,
     )
     side2 = format_asset_list(
-        tx.get("franchise2_gave_up"), players, season_year, franchise_names
+        tx.get("franchise2_gave_up"),
+        players,
+        season_year,
+        franchise_names,
+        f2,
+        salaries,
     )
     comments = (tx.get("comments") or "").strip()
-    header = f"**{name1}** sends: {side1}\n**{name2}** sends: {side2}"
+    header = f"**{name1}** sends:\n{side1}\n**{name2}** sends:\n{side2}"
     if comments:
         safe = comments.replace("`", "'")[:500]
         header += f"\n_Comments:_ {safe}"
@@ -222,10 +263,13 @@ async def dry_run(apply_dedupe: bool, *, last_trade_only: bool = False) -> int:
         league_json = await client.fetch_league()
         await client.sleep_between_exports()
         players = await client.get_players_map()
+        await client.sleep_between_exports()
+        rosters_json = await client.fetch_rosters()
     finally:
         await client.aclose()
 
     franchise_names = franchise_names_from_league(league_json)
+    salaries = player_salaries_by_franchise(rosters_json)
     now = time.time()
 
     if last_trade_only:
@@ -235,7 +279,7 @@ async def dry_run(apply_dedupe: bool, *, last_trade_only: bool = False) -> int:
             return 0
         trades_only.sort(key=lambda t: trade_submitted_unix(t) or 0.0)
         tx = trades_only[-1]
-        print(format_trade_text(tx, franchise_names, players, season_year))
+        print(format_trade_text(tx, franchise_names, players, season_year, salaries))
         pending = not is_processed_trade(tx, now)
         phase = "pending veto window" if pending else "processed"
         print(
@@ -260,7 +304,7 @@ async def dry_run(apply_dedupe: bool, *, last_trade_only: bool = False) -> int:
                 seen.add(key)
                 seeded += 1
             continue
-        print(format_trade_text(tx, franchise_names, players, season_year))
+        print(format_trade_text(tx, franchise_names, players, season_year, salaries))
         print("---")
         new_count += 1
         if apply_dedupe:

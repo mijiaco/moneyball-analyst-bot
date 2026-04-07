@@ -87,6 +87,10 @@ class MflClient:
         data = await self._get_json({"TYPE": "league"})
         return data if isinstance(data, dict) else {}
 
+    async def fetch_rosters(self) -> dict[str, Any]:
+        data = await self._get_json({"TYPE": "rosters"})
+        return data if isinstance(data, dict) else {}
+
     async def _fetch_players_live(self) -> dict[str, Any]:
         data = await self._get_json({"TYPE": "players"})
         return data if isinstance(data, dict) else {}
@@ -143,6 +147,32 @@ class MflClient:
         import asyncio
 
         await asyncio.sleep(seconds)
+
+
+def player_salaries_by_franchise(rosters_json: dict[str, Any]) -> dict[str, dict[str, str]]:
+    """
+    franchise_id -> player_id -> salary string (MFL cap / auction amount, e.g. '35').
+    """
+    out: dict[str, dict[str, str]] = {}
+    block = rosters_json.get("rosters") or {}
+    fr_rows = _normalize_transaction_list(block.get("franchise"))
+    for fr in fr_rows:
+        fid = fr.get("id")
+        if fid is None:
+            continue
+        fid_s = str(fid)
+        inner: dict[str, str] = {}
+        for p in _normalize_transaction_list(fr.get("player")):
+            pid = p.get("id")
+            if pid is None:
+                continue
+            sal = p.get("salary")
+            if sal is None or str(sal).strip() == "":
+                continue
+            inner[str(pid)] = str(sal).strip()
+        if inner:
+            out[fid_s] = inner
+    return out
 
 
 def franchise_names_from_league(league_json: dict[str, Any]) -> dict[str, str]:
