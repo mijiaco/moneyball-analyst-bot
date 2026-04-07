@@ -33,14 +33,31 @@ def trade_fingerprint(tx: dict[str, Any]) -> str:
     return "|".join(parts)
 
 
-def trade_notification_key(tx: dict[str, Any], now_unix: float | None = None) -> str:
+def trade_notification_key(
+    tx: dict[str, Any],
+    now_unix: float | None = None,
+    *,
+    include_phase: bool = False,
+) -> str:
     """
-    Dedupe key for notifications. Pending (veto window) and processed get different suffixes
-    so the same deal can notify twice: proposed, then completed.
+    Dedupe key for notifications.
+    - include_phase=False: one notification key per trade (default, no duplicates).
+    - include_phase=True: pending/processed receive distinct suffixes (legacy behavior).
     """
+    if not include_phase:
+        return trade_fingerprint(tx)
     now = now_unix if now_unix is not None else time.time()
     phase = "P" if not is_processed_trade(tx, now) else "C"
     return f"{trade_fingerprint(tx)}|{phase}"
+
+
+def trade_notification_key_variants(tx: dict[str, Any], now_unix: float) -> tuple[str, str, str]:
+    """
+    Return all key variants for backward-compatible dedupe checks:
+    (base, pending-suffixed, processed-suffixed).
+    """
+    base = trade_notification_key(tx, now_unix, include_phase=False)
+    return (base, f"{base}|P", f"{base}|C")
 
 
 def trade_submitted_unix(tx: dict[str, Any]) -> float | None:
@@ -317,8 +334,9 @@ async def dry_run(apply_dedupe: bool, *, last_trade_only: bool = False) -> int:
         pending = not is_processed_trade(tx, now)
         if pending and not announce_pending:
             continue
-        key = trade_notification_key(tx, now)
-        if apply_dedupe and key in seen:
+        key = trade_notification_key(tx, now, include_phase=False)
+        key_base, key_p, key_c = trade_notification_key_variants(tx, now)
+        if apply_dedupe and (key_base in seen or key_p in seen or key_c in seen):
             continue
         if is_trade_too_old_to_announce(tx, now, max_age_hours):
             if apply_dedupe:

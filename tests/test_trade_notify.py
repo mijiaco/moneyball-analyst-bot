@@ -17,6 +17,7 @@ from src.trade_notify import (
     save_seen,
     trade_fingerprint,
     trade_notification_key,
+    trade_notification_key_variants,
 )
 
 
@@ -36,12 +37,27 @@ def test_trade_fingerprint_includes_comments_and_empty_stable() -> None:
     assert "1775415606" in trade_fingerprint(base)
 
 
-def test_trade_notification_key_phase() -> None:
+def test_trade_notification_key_default_is_single_key() -> None:
     now = 2_000_000.0
     tx_p = {"expires": str(int(now + 3600)), "timestamp": "1", "franchise": "0001"}
     tx_c = {"expires": str(int(now - 1)), "timestamp": "1", "franchise": "0001"}
-    assert trade_notification_key(tx_p, now).endswith("|P")
-    assert trade_notification_key(tx_c, now).endswith("|C")
+    assert trade_notification_key(tx_p, now) == trade_notification_key(tx_c, now)
+
+
+def test_trade_notification_key_phase_when_enabled() -> None:
+    now = 2_000_000.0
+    tx_p = {"expires": str(int(now + 3600)), "timestamp": "1", "franchise": "0001"}
+    tx_c = {"expires": str(int(now - 1)), "timestamp": "1", "franchise": "0001"}
+    assert trade_notification_key(tx_p, now, include_phase=True).endswith("|P")
+    assert trade_notification_key(tx_c, now, include_phase=True).endswith("|C")
+
+
+def test_trade_notification_key_variants_include_legacy_suffixes() -> None:
+    now = 2_000_000.0
+    tx = {"expires": str(int(now + 3600)), "timestamp": "1", "franchise": "0001"}
+    base, key_p, key_c = trade_notification_key_variants(tx, now)
+    assert key_p == f"{base}|P"
+    assert key_c == f"{base}|C"
 
 
 def test_is_trade_too_old_to_announce() -> None:

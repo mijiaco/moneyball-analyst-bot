@@ -16,6 +16,7 @@ from src.trade_notify import (
     is_processed_trade,
     is_trade_too_old_to_announce,
     trade_notification_key,
+    trade_notification_key_variants,
 )
 
 DISCORD_DESCRIPTION_LIMIT = 4096
@@ -40,6 +41,7 @@ async def poll_trades_for_new_messages(
     announce_pending: bool,
     announce_max_age_hours: float,
     season_year: int,
+    notify_once_per_trade: bool,
 ) -> tuple[list[tuple[str, TradeMessagePayload]], bool]:
     """
     Fetch MFL. Mutates seen only for old-trade silent seeds.
@@ -65,8 +67,13 @@ async def poll_trades_for_new_messages(
             continue
         if not announce_pending and not is_processed_trade(tx, now):
             continue
-        key = trade_notification_key(tx, now)
-        if key in seen:
+        key = trade_notification_key(
+            tx,
+            now,
+            include_phase=not notify_once_per_trade,
+        )
+        key_base, key_p, key_c = trade_notification_key_variants(tx, now)
+        if key in seen or key_base in seen or key_p in seen or key_c in seen:
             continue
         if is_trade_too_old_to_announce(tx, now, announce_max_age_hours):
             seen.add(key)
