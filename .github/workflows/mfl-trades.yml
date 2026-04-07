@@ -60,5 +60,6 @@ jobs:
             echo "No seen_trades changes"
           else
             git commit -m "chore: update seen trades dedupe state"
+            git pull --rebase origin "${{ github.event.repository.default_branch }}"
             git push
           fi
