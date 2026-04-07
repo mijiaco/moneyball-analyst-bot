@@ -15,8 +15,8 @@ from src.trade_notify import (
 )
 
 DISCORD_DESCRIPTION_LIMIT = 4096
-_PROCESSED_COLOR = discord.Color.dark_green().value
-_PENDING_COLOR = discord.Color.orange().value
+_TRADE_EMBED_COLOR = discord.Color.dark_green().value
+_TRADE_EMBED_TITLE = "Trade"
 
 
 class TradeMessagePayload:
@@ -68,9 +68,6 @@ async def poll_trades_for_new_messages(
         body = format_trade_text(tx, franchise_names, players, season_year)
         if len(body) > DISCORD_DESCRIPTION_LIMIT:
             body = body[: DISCORD_DESCRIPTION_LIMIT - 3] + "..."
-        processed = is_processed_trade(tx, now)
-        title = "Processed trade" if processed else "Pending trade (veto period)"
-        color = _PROCESSED_COLOR if processed else _PENDING_COLOR
-        out.append((key, TradeMessagePayload(title, body, color)))
+        out.append((key, TradeMessagePayload(_TRADE_EMBED_TITLE, body, _TRADE_EMBED_COLOR)))
 
     return out, updated
