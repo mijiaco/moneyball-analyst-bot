@@ -19,6 +19,7 @@ from src.mfl_client import (
     MflClient,
     franchise_names_from_league,
     player_points_by_id,
+    player_contract_years_by_franchise,
     player_salaries_by_franchise,
 )
 
@@ -329,6 +330,63 @@ def _salary_for_player_on_franchise(
     return None
 
 
+def _contract_year_for_player_on_franchise(
+    contract_years_by_franchise: dict[str, dict[str, str]],
+    franchise_id: str,
+    player_token: str,
+) -> str | None:
+    fr_map = contract_years_by_franchise.get(franchise_id) or {}
+    if player_token in fr_map:
+        return fr_map[player_token]
+    if not player_token.isdigit():
+        return None
+    want = int(player_token)
+    for k, v in fr_map.items():
+        if k.isdigit() and int(k) == want:
+            return v
+    found_cy: str | None = None
+    for other_fr_map in contract_years_by_franchise.values():
+        if player_token in other_fr_map:
+            cy = other_fr_map[player_token]
+        else:
+            cy = None
+            for k, v in other_fr_map.items():
+                if k.isdigit() and int(k) == want:
+                    cy = v
+                    break
+        if cy is None:
+            continue
+        if found_cy is None:
+            found_cy = cy
+            continue
+        if cy != found_cy:
+            return None
+    return found_cy
+
+
+def _format_player_asset_suffix(
+    sal: str | None,
+    points: float | None,
+    contract_yr: str | None,
+) -> str | None:
+    """Build `$N sal / M pts / K yr` with whole-number salary and points."""
+    parts: list[str] = []
+    if sal is not None:
+        sal_s = str(sal).strip()
+        try:
+            sal_int = round(float(sal_s.replace(",", "")))
+            parts.append(f"${sal_int} sal")
+        except (TypeError, ValueError):
+            parts.append(f"${sal_s} sal")
+    if points is not None:
+        parts.append(f"{round(points)} pts")
+    if contract_yr is not None and str(contract_yr).strip() != "":
+        parts.append(f"{str(contract_yr).strip()} yr")
+    if not parts:
+        return None
+    return " / ".join(parts)
+
+
 def format_draft_token(token: str, season_year: int) -> str:
     """
     MFL draft pick tokens use zero-based round and pick in DP_r_p
@@ -359,10 +417,14 @@ def format_asset_list(
     salaries_by_franchise: dict[str, dict[str, str]],
     points_by_player_id: dict[str, float] | None = None,
     player_name_to_id: dict[str, str] | None = None,
+    contract_years_by_franchise: dict[str, dict[str, str]] | None = None,
 ) -> str:
     tokens = _split_gave_up(gave_up)
     if not tokens:
         return "* (nothing listed)"
+    contract_map = (
+        contract_years_by_franchise if contract_years_by_franchise is not None else {}
+    )
     lines: list[str] = []
     for t in tokens:
         if t.startswith("DP_"):
@@ -384,12 +446,12 @@ def format_asset_list(
             points = None
             if points_by_player_id is not None:
                 points = points_by_player_id.get(str(resolved_token))
-            if sal is not None and points is not None:
-                label = f"{label} (${sal}, {points:.2f} pts)"
-            elif sal is not None:
-                label = f"{label} (${sal})"
-            elif points is not None:
-                label = f"{label} ({points:.2f} pts)"
+            cy = _contract_year_for_player_on_franchise(
+                contract_map, sending_franchise_id, resolved_token
+            )
+            suffix = _format_player_asset_suffix(sal, points, cy)
+            if suffix is not None:
+                label = f"{label} ({suffix})"
             lines.append(label)
     return "\n".join(f"* {line}" for line in lines)
 
@@ -401,8 +463,12 @@ def format_trade_text(
     season_year: int,
     salaries_by_franchise: dict[str, dict[str, str]] | None = None,
     points_by_player_id: dict[str, float] | None = None,
+    contract_years_by_franchise: dict[str, dict[str, str]] | None = None,
 ) -> str:
     salaries = salaries_by_franchise if salaries_by_franchise is not None else {}
+    contract_years = (
+        contract_years_by_franchise if contract_years_by_franchise is not None else {}
+    )
     player_name_to_id = _build_player_name_index(players)
     f1 = str(tx.get("franchise", ""))
     f2 = str(tx.get("franchise2", ""))
@@ -417,6 +483,7 @@ def format_trade_text(
         salaries,
         points_by_player_id,
         player_name_to_id,
+        contract_years,
     )
     side2 = format_asset_list(
         tx.get("franchise2_gave_up"),
@@ -427,6 +494,7 @@ def format_trade_text(
         salaries,
         points_by_player_id,
         player_name_to_id,
+        contract_years,
     )
     comments = (tx.get("comments") or "").strip()
     header = f"**{name1}** sends:\n{side1}\n**{name2}** sends:\n{side2}"
@@ -443,6 +511,7 @@ def format_trade_bait_text(
     season_year: int,
     salaries_by_franchise: dict[str, dict[str, str]] | None = None,
     points_by_player_id: dict[str, float] | None = None,
+    contract_years_by_franchise: dict[str, dict[str, str]] | None = None,
 ) -> str:
     salaries = salaries_by_franchise if salaries_by_franchise is not None else {}
     player_name_to_id = _build_player_name_index(players)
@@ -457,6 +526,7 @@ def format_trade_bait_text(
         salaries,
         points_by_player_id,
         player_name_to_id,
+        contract_years_by_franchise,
     )
     wants = (tb.get("inExchangeFor") or "").strip()
     body = f"**{team_name}** is offering:\n{give_up}"
@@ -533,6 +603,7 @@ async def dry_run(apply_dedupe: bool, *, last_trade_only: bool = False) -> int:
 
     franchise_names = franchise_names_from_league(league_json)
     salaries = player_salaries_by_franchise(rosters_json)
+    contract_years = player_contract_years_by_franchise(rosters_json)
     points_by_player_id = player_points_by_id(scores_json)
     now = time.time()
 
@@ -545,7 +616,13 @@ async def dry_run(apply_dedupe: bool, *, last_trade_only: bool = False) -> int:
         tx = trades_only[-1]
         print(
             format_trade_text(
-                tx, franchise_names, players, season_year, salaries, points_by_player_id
+                tx,
+                franchise_names,
+                players,
+                season_year,
+                salaries,
+                points_by_player_id,
+                contract_years,
             )
         )
         pending = not is_processed_trade(tx, now)
@@ -582,7 +659,13 @@ async def dry_run(apply_dedupe: bool, *, last_trade_only: bool = False) -> int:
             continue
         print(
             format_trade_text(
-                tx, franchise_names, players, season_year, salaries, points_by_player_id
+                tx,
+                franchise_names,
+                players,
+                season_year,
+                salaries,
+                points_by_player_id,
+                contract_years,
             )
         )
         print("---")

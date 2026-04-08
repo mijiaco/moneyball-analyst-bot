@@ -231,7 +231,7 @@ def test_format_trade_text_player_salary_bullets() -> None:
     players = {"16257": "Greenard, Jonathan MIN DE"}
     salaries = {"0009": {"16257": "35"}}
     text = format_trade_text(tx, franchises, players, 2026, salaries)
-    assert "* Greenard, Jonathan MIN DE ($35)" in text
+    assert "* Greenard, Jonathan MIN DE ($35 sal)" in text
     assert "* 2026 draft R1.16" in text
     assert "* 2026 draft R2.03" in text
     assert "* 2026 draft R4.14" in text
@@ -252,8 +252,30 @@ def test_format_trade_text_player_salary_and_points_bullets() -> None:
     salaries = {"0009": {"16257": "176"}, "0024": {"17000": "201"}}
     points = {"16257": 213.2, "17000": 367.4}
     text = format_trade_text(tx, franchises, players, 2026, salaries, points)
-    assert "* Bowers, Brock LVR TE ($176, 213.20 pts)" in text
-    assert "* Smith-Njigba, Jaxon SEA WR ($201, 367.40 pts)" in text
+    assert "* Bowers, Brock LVR TE ($176 sal / 213 pts)" in text
+    assert "* Smith-Njigba, Jaxon SEA WR ($201 sal / 367 pts)" in text
+
+
+def test_format_trade_text_player_salary_points_contract() -> None:
+    tx = {
+        "franchise": "0009",
+        "franchise2": "0024",
+        "franchise1_gave_up": "16257,",
+        "franchise2_gave_up": "17000,",
+    }
+    franchises = {"0009": "Team A", "0024": "Team B"}
+    players = {
+        "16257": "Oliver, Josh MIN TE",
+        "17000": "Other Player SEA WR",
+    }
+    salaries = {"0009": {"16257": "13"}, "0024": {"17000": "50"}}
+    points = {"16257": 67.4, "17000": 100.6}
+    contract_years = {"0009": {"16257": "1"}, "0024": {"17000": "2"}}
+    text = format_trade_text(
+        tx, franchises, players, 2026, salaries, points, contract_years
+    )
+    assert "* Oliver, Josh MIN TE ($13 sal / 67 pts / 1 yr)" in text
+    assert "* Other Player SEA WR ($50 sal / 101 pts / 2 yr)" in text
 
 
 def test_format_trade_text_processed_human_assets_have_bullets_and_salary() -> None:
@@ -273,9 +295,13 @@ def test_format_trade_text_processed_human_assets_have_bullets_and_salary() -> N
         "0009": {"101": "47"},
         "0024": {"102": "28"},
     }
-    text = format_trade_text(tx, franchises, players, 2026, salaries)
-    assert "* Campbell, Jack DET LB ($47)" in text
-    assert "* Hamilton, Kyle BAL S ($28)" in text
+    contract_years = {
+        "0009": {"101": "3"},
+        "0024": {"102": "1"},
+    }
+    text = format_trade_text(tx, franchises, players, 2026, salaries, None, contract_years)
+    assert "* Campbell, Jack DET LB ($47 sal / 3 yr)" in text
+    assert "* Hamilton, Kyle BAL S ($28 sal / 1 yr)" in text
     assert "* 2026 draft R2.20" in text
     assert "* 2026 draft R3.20" in text
     assert "_Comments:_ Any thoughts on this?" in text
@@ -292,7 +318,7 @@ def test_format_trade_text_salary_fallback_across_franchises() -> None:
     players = {"15797": "Dulcich, Greg MIA TE"}
     salaries = {"0013": {"15797": "22"}}
     text = format_trade_text(tx, franchises, players, 2026, salaries)
-    assert "* Dulcich, Greg MIA TE ($22)" in text
+    assert "* Dulcich, Greg MIA TE ($22 sal)" in text
 
 
 def test_format_trade_bait_text_bullets_and_salary() -> None:
@@ -306,7 +332,7 @@ def test_format_trade_bait_text_bullets_and_salary() -> None:
     salaries = {"0009": {"16257": "35"}}
     text = format_trade_bait_text(tb, franchises, players, 2026, salaries)
     assert "**Team A** is offering:" in text
-    assert "* Greenard, Jonathan MIN DE ($35)" in text
+    assert "* Greenard, Jonathan MIN DE ($35 sal)" in text
     assert "* 2026 draft R1.22" in text
     assert "**Looking for:**" in text
     assert "* 2027 picks" in text
@@ -343,7 +369,7 @@ def test_format_trade_bait_text_bullets_salary_and_points() -> None:
     salaries = {"0009": {"16257": "176"}}
     points = {"16257": 213.2}
     text = format_trade_bait_text(tb, franchises, players, 2026, salaries, points)
-    assert "* Bowers, Brock LVR TE ($176, 213.20 pts)" in text
+    assert "* Bowers, Brock LVR TE ($176 sal / 213 pts)" in text
 
 
 def test_load_save_seen_roundtrip() -> None:

@@ -9,6 +9,7 @@ import discord
 from src.mfl_client import (
     MflClient,
     franchise_names_from_league,
+    player_contract_years_by_franchise,
     player_points_by_id,
     player_salaries_by_franchise,
 )
@@ -71,6 +72,7 @@ async def poll_trades_for_new_messages(
         # Keep trade polling alive even when playerScores export is unavailable.
         player_scores_json = {}
     salaries_by_franchise = player_salaries_by_franchise(rosters_json)
+    contract_years_by_franchise = player_contract_years_by_franchise(rosters_json)
     points_by_player_id = player_points_by_id(player_scores_json)
 
     franchise_names = franchise_names_from_league(league_json)
@@ -104,6 +106,7 @@ async def poll_trades_for_new_messages(
             season_year,
             salaries_by_franchise,
             points_by_player_id,
+            contract_years_by_franchise,
         )
         if len(body) > DISCORD_DESCRIPTION_LIMIT:
             body = body[: DISCORD_DESCRIPTION_LIMIT - 3] + "..."
@@ -125,6 +128,7 @@ async def poll_trades_for_new_messages(
                 season_year,
                 salaries_by_franchise,
                 points_by_player_id,
+                contract_years_by_franchise,
             )
             if len(body) > DISCORD_DESCRIPTION_LIMIT:
                 body = body[: DISCORD_DESCRIPTION_LIMIT - 3] + "..."
