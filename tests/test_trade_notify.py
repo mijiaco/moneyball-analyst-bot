@@ -18,13 +18,15 @@ from src.trade_notify import (
     load_seen,
     save_seen,
     trade_bait_notification_key,
+    trade_dedupe_resolved,
     trade_fingerprint,
+    trade_fingerprint_legacy,
     trade_notification_key,
     trade_notification_key_variants,
 )
 
 
-def test_trade_fingerprint_includes_comments_and_empty_stable() -> None:
+def test_trade_fingerprint_ignores_comments_and_normalizes_asset_order() -> None:
     base = {
         "timestamp": "1775415606",
         "franchise": "0009",
@@ -36,8 +38,44 @@ def test_trade_fingerprint_includes_comments_and_empty_stable() -> None:
     empty_comment = dict(base, comments="")
     assert trade_fingerprint(no_comment) == trade_fingerprint(empty_comment)
     with_text = dict(base, comments="hello")
-    assert trade_fingerprint(with_text) != trade_fingerprint(no_comment)
+    assert trade_fingerprint(with_text) == trade_fingerprint(no_comment)
     assert "1775415606" in trade_fingerprint(base)
+    reordered = dict(
+        base,
+        franchise1_gave_up="DP_0_21,16257,",
+    )
+    assert trade_fingerprint(reordered) == trade_fingerprint(base)
+
+
+def test_trade_fingerprint_legacy_still_varies_with_comments() -> None:
+    base = {
+        "timestamp": "1775415606",
+        "franchise": "0009",
+        "franchise2": "0024",
+        "franchise1_gave_up": "16257,DP_0_21,",
+        "franchise2_gave_up": "DP_1_2,",
+    }
+    assert trade_fingerprint_legacy(dict(base, comments="a")) != trade_fingerprint_legacy(
+        dict(base, comments="b")
+    )
+
+
+def test_trade_dedupe_resolved_migrates_legacy_seen_key() -> None:
+    now = 2_000_000.0
+    tx = {
+        "timestamp": "1775415606",
+        "franchise": "0009",
+        "franchise2": "0024",
+        "franchise1_gave_up": "16257,DP_0_21,",
+        "franchise2_gave_up": "DP_1_2,",
+        "comments": "edited later",
+    }
+    legacy = trade_fingerprint_legacy(dict(tx, comments=""))
+    seen = {legacy}
+    skip, migrated = trade_dedupe_resolved(tx, seen, now, notify_once_per_trade=True)
+    assert skip is True
+    assert migrated is True
+    assert trade_notification_key(tx, now, include_phase=False) in seen
 
 
 def test_trade_notification_key_default_is_single_key() -> None:

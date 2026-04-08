@@ -18,8 +18,8 @@ from src.trade_notify import (
     is_processed_trade,
     is_trade_too_old_to_announce,
     trade_bait_notification_key,
+    trade_dedupe_resolved,
     trade_notification_key,
-    trade_notification_key_variants,
 )
 
 DISCORD_DESCRIPTION_LIMIT = 4096
@@ -75,14 +75,16 @@ async def poll_trades_for_new_messages(
             continue
         if not announce_pending and not is_processed_trade(tx, now):
             continue
-        key = trade_notification_key(
-            tx,
-            now,
-            include_phase=not notify_once_per_trade,
+        skip, migrated = trade_dedupe_resolved(
+            tx, seen, now, notify_once_per_trade=notify_once_per_trade
         )
-        key_base, key_p, key_c = trade_notification_key_variants(tx, now)
-        if key in seen or key_base in seen or key_p in seen or key_c in seen:
+        if migrated:
+            updated = True
+        if skip:
             continue
+        key = trade_notification_key(
+            tx, now, include_phase=not notify_once_per_trade
+        )
         if is_trade_too_old_to_announce(tx, now, announce_max_age_hours):
             seen.add(key)
             updated = True

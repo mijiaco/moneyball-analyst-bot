@@ -20,8 +20,32 @@ from src.mfl_client import (
 )
 
 
+def _normalize_gave_up_field(raw: str | None) -> str:
+    """Stable ordering of comma-separated asset tokens (MFL sometimes reorders)."""
+    toks = sorted(_split_gave_up(raw))
+    return ",".join(toks)
+
+
 def trade_fingerprint(tx: dict[str, Any]) -> str:
-    """Dedupe identity: teams, assets, MFL timestamp, and comment text (empty if none)."""
+    """
+    Dedupe identity for new posts: stable across comment edits and gave_up token order.
+    Uses MFL transaction id when present; otherwise timestamp + franchises + normalized assets.
+    """
+    tid = tx.get("transaction_id") or tx.get("id")
+    if tid is not None and str(tid).strip() != "":
+        return f"id|{str(tid).strip()}"
+    parts = [
+        str(tx.get("timestamp", "")),
+        str(tx.get("franchise", "")),
+        str(tx.get("franchise2", "")),
+        _normalize_gave_up_field(tx.get("franchise1_gave_up")),
+        _normalize_gave_up_field(tx.get("franchise2_gave_up")),
+    ]
+    return "|".join(parts)
+
+
+def trade_fingerprint_legacy(tx: dict[str, Any]) -> str:
+    """Pre-change fingerprint (included comments). Used only to match existing seen_trades.json."""
     parts = [
         str(tx.get("timestamp", "")),
         str(tx.get("franchise", "")),
@@ -31,6 +55,49 @@ def trade_fingerprint(tx: dict[str, Any]) -> str:
         (str(tx.get("comments") or "").strip()),
     ]
     return "|".join(parts)
+
+
+def _legacy_trade_seen_keys(tx: dict[str, Any]) -> list[str]:
+    """Match older seen_trades entries that included comments in the fingerprint."""
+    t_blank = dict(tx)
+    t_blank["comments"] = ""
+    bases = {trade_fingerprint_legacy(tx), trade_fingerprint_legacy(t_blank)}
+    keys: list[str] = []
+    for b in sorted(bases):
+        for k in (b, f"{b}|P", f"{b}|C"):
+            if k not in keys:
+                keys.append(k)
+    return keys
+
+
+def trade_dedupe_resolved(
+    tx: dict[str, Any],
+    seen: set[str],
+    now_unix: float,
+    *,
+    notify_once_per_trade: bool,
+) -> tuple[bool, bool]:
+    """
+    Decide whether to skip announcing this trade.
+    Returns (skip_announcement, seen_mutated_for_migration).
+
+    If seen contains only a legacy key for this trade, adds the current key and sets mutated True.
+    """
+    key = trade_notification_key(
+        tx, now_unix, include_phase=not notify_once_per_trade
+    )
+    base_stable, key_p, key_c = trade_notification_key_variants(tx, now_unix)
+
+    if key in seen or base_stable in seen or key_p in seen or key_c in seen:
+        return (True, False)
+
+    for leg in _legacy_trade_seen_keys(tx):
+        if leg in seen:
+            if key not in seen:
+                seen.add(key)
+                return (True, True)
+            return (True, False)
+    return (False, False)
 
 
 def trade_notification_key(
@@ -337,6 +404,7 @@ async def dry_run(apply_dedupe: bool, *, last_trade_only: bool = False) -> int:
     lookback = int(os.environ.get("MFL_TRADE_LOOKBACK_DAYS", "14"))
     max_age_hours = float(os.environ.get("MFL_ANNOUNCE_MAX_AGE_HOURS", "48"))
     announce_pending = env_bool("MFL_ANNOUNCE_PENDING_TRADES", True)
+    notify_once_per_trade = env_bool("MFL_NOTIFY_ONCE_PER_TRADE", True)
     season_year = int(year)
     data_dir = Path(__file__).resolve().parent.parent / "data"
     seen_path = data_dir / "seen_trades.json"
@@ -391,10 +459,17 @@ async def dry_run(apply_dedupe: bool, *, last_trade_only: bool = False) -> int:
         pending = not is_processed_trade(tx, now)
         if pending and not announce_pending:
             continue
-        key = trade_notification_key(tx, now, include_phase=False)
-        key_base, key_p, key_c = trade_notification_key_variants(tx, now)
-        if apply_dedupe and (key_base in seen or key_p in seen or key_c in seen):
-            continue
+        key = trade_notification_key(
+            tx, now, include_phase=not notify_once_per_trade
+        )
+        if apply_dedupe:
+            skip, migrated = trade_dedupe_resolved(
+                tx, seen, now, notify_once_per_trade=notify_once_per_trade
+            )
+            if migrated:
+                seeded += 1
+            if skip:
+                continue
         if is_trade_too_old_to_announce(tx, now, max_age_hours):
             if apply_dedupe:
                 seen.add(key)
