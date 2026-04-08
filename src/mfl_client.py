@@ -107,20 +107,58 @@ class MflClient:
         if self._api_key:
             params["APIKEY"] = self._api_key
         headers = dict(self._client.headers)
-        last_err: BaseException | None = None
-        for attempt in range(3):
-            try:
-                response = await self._client.get(
-                    f"https://{self._host}/export",
-                    params=params,
-                    headers=headers,
+        def _has_player_score_rows(data: Any) -> bool:
+            if not isinstance(data, dict):
+                return False
+            block = data.get("playerScores") or data.get("playerscores") or {}
+            rows = _normalize_transaction_list(block.get("playerScore") or block.get("player"))
+            for row in rows:
+                pid = row.get("id")
+                if pid is None or str(pid).strip() == "":
+                    continue
+                raw_points = (
+                    row.get("score")
+                    or row.get("points")
+                    or row.get("fantasyPoints")
+                    or row.get("ytd_points")
                 )
-                response.raise_for_status()
-                data = response.json()
-                return data if isinstance(data, dict) else {}
-            except (httpx.HTTPError, OSError, ValueError) as exc:
-                last_err = exc
-                await asyncio.sleep(1.0 * (attempt + 1))
+                if raw_points is None or str(raw_points).strip() == "":
+                    continue
+                return True
+            return False
+
+        # MFL host behavior can vary by league/year; try current-year and league-year endpoints,
+        # then fall back to prior league year when current data is placeholder-only.
+        endpoints = [f"https://{self._host}/export", self._base]
+        try:
+            prev_year = int(self._year) - 1
+            if prev_year > 0:
+                endpoints.append(f"https://{self._host}/{prev_year}/export")
+        except (TypeError, ValueError):
+            pass
+        last_err: BaseException | None = None
+        first_payload: dict[str, Any] | None = None
+        for endpoint in endpoints:
+            for attempt in range(3):
+                try:
+                    response = await self._client.get(
+                        endpoint,
+                        params=params,
+                        headers=headers,
+                    )
+                    response.raise_for_status()
+                    data = response.json()
+                    payload = data if isinstance(data, dict) else {}
+                    if _has_player_score_rows(payload):
+                        return payload
+                    if first_payload is None:
+                        first_payload = payload
+                    break
+                except (httpx.HTTPError, OSError, ValueError) as exc:
+                    last_err = exc
+                    await asyncio.sleep(1.0 * (attempt + 1))
+        if first_payload is not None:
+            return first_payload
         assert last_err is not None
         raise last_err
 
