@@ -7,7 +7,10 @@ import tempfile
 import time
 from pathlib import Path
 
+from src.mfl_client import player_points_by_id
 from src.trade_notify import (
+    TRADE_BAIT_COMMENTARY_LINES,
+    TRADE_COMMENTARY_LINES,
     format_trade_bait_text,
     format_draft_token,
     format_future_pick_token,
@@ -17,6 +20,7 @@ from src.trade_notify import (
     is_trade_too_old_to_announce,
     load_seen,
     save_seen,
+    random_trade_commentary,
     trade_bait_notification_key,
     trade_dedupe_resolved,
     trade_fingerprint,
@@ -170,6 +174,32 @@ def test_format_trade_text() -> None:
     assert "note" in text
 
 
+def test_random_trade_commentary_uses_expected_repository() -> None:
+    assert random_trade_commentary() in TRADE_COMMENTARY_LINES
+    assert random_trade_commentary(trade_bait=True) in TRADE_BAIT_COMMENTARY_LINES
+
+
+def test_format_trade_text_includes_commentary_line(monkeypatch) -> None:
+    calls: list[bool] = []
+
+    def fake_commentary(*, trade_bait: bool = False) -> str:
+        calls.append(trade_bait)
+        return "TEST COMMENTARY"
+
+    monkeypatch.setattr("src.trade_notify.random_trade_commentary", fake_commentary)
+    tx = {
+        "franchise": "0009",
+        "franchise2": "0024",
+        "franchise1_gave_up": "16257,",
+        "franchise2_gave_up": "DP_1_2,",
+    }
+    franchises = {"0009": "Team A", "0024": "Team B"}
+    players = {"16257": "Felix Anudike-Uzomah KCC DE"}
+    text = format_trade_text(tx, franchises, players, 2026)
+    assert text.startswith("TEST COMMENTARY\n\n")
+    assert calls == [False]
+
+
 def test_format_trade_text_player_salary_bullets() -> None:
     tx = {
         "franchise": "0009",
@@ -185,6 +215,50 @@ def test_format_trade_text_player_salary_bullets() -> None:
     assert "* 2026 draft R1.16" in text
     assert "* 2026 draft R2.03" in text
     assert "* 2026 draft R4.14" in text
+
+
+def test_format_trade_text_player_salary_and_points_bullets() -> None:
+    tx = {
+        "franchise": "0009",
+        "franchise2": "0024",
+        "franchise1_gave_up": "16257,",
+        "franchise2_gave_up": "17000,",
+    }
+    franchises = {"0009": "Team A", "0024": "Team B"}
+    players = {
+        "16257": "Bowers, Brock LVR TE",
+        "17000": "Smith-Njigba, Jaxon SEA WR",
+    }
+    salaries = {"0009": {"16257": "176"}, "0024": {"17000": "201"}}
+    points = {"16257": 213.2, "17000": 367.4}
+    text = format_trade_text(tx, franchises, players, 2026, salaries, points)
+    assert "* Bowers, Brock LVR TE ($176, 213.20 pts)" in text
+    assert "* Smith-Njigba, Jaxon SEA WR ($201, 367.40 pts)" in text
+
+
+def test_format_trade_text_processed_human_assets_have_bullets_and_salary() -> None:
+    tx = {
+        "franchise": "0009",
+        "franchise2": "0024",
+        "franchise1_gave_up": "Campbell, Jack DET LB",
+        "franchise2_gave_up": "Hamilton, Kyle BAL S; DP_1_19; DP_2_19",
+        "comments": "Any thoughts on this?",
+    }
+    franchises = {"0009": "Brute Force & Ignorance", "0024": "Cascade Wrecking Crew"}
+    players = {
+        "101": "Campbell, Jack DET LB",
+        "102": "Hamilton, Kyle BAL S",
+    }
+    salaries = {
+        "0009": {"101": "47"},
+        "0024": {"102": "28"},
+    }
+    text = format_trade_text(tx, franchises, players, 2026, salaries)
+    assert "* Campbell, Jack DET LB ($47)" in text
+    assert "* Hamilton, Kyle BAL S ($28)" in text
+    assert "* 2026 draft R2.20" in text
+    assert "* 2026 draft R3.20" in text
+    assert "_Comments:_ Any thoughts on this?" in text
 
 
 def test_format_trade_text_salary_fallback_across_franchises() -> None:
@@ -218,6 +292,40 @@ def test_format_trade_bait_text_bullets_and_salary() -> None:
     assert "* 2027 picks" in text
 
 
+def test_format_trade_bait_text_includes_commentary_line(monkeypatch) -> None:
+    calls: list[bool] = []
+
+    def fake_commentary(*, trade_bait: bool = False) -> str:
+        calls.append(trade_bait)
+        return "TEST BAIT COMMENTARY"
+
+    monkeypatch.setattr("src.trade_notify.random_trade_commentary", fake_commentary)
+    tb = {
+        "franchise_id": "0009",
+        "willGiveUp": "16257,",
+        "inExchangeFor": "2027 picks",
+    }
+    franchises = {"0009": "Team A"}
+    players = {"16257": "Greenard, Jonathan MIN DE"}
+    text = format_trade_bait_text(tb, franchises, players, 2026)
+    assert text.startswith("TEST BAIT COMMENTARY\n\n")
+    assert calls == [True]
+
+
+def test_format_trade_bait_text_bullets_salary_and_points() -> None:
+    tb = {
+        "franchise_id": "0009",
+        "willGiveUp": "16257,",
+        "inExchangeFor": "2027 picks",
+    }
+    franchises = {"0009": "Team A"}
+    players = {"16257": "Bowers, Brock LVR TE"}
+    salaries = {"0009": {"16257": "176"}}
+    points = {"16257": 213.2}
+    text = format_trade_bait_text(tb, franchises, players, 2026, salaries, points)
+    assert "* Bowers, Brock LVR TE ($176, 213.20 pts)" in text
+
+
 def test_load_save_seen_roundtrip() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "seen.json"
@@ -244,3 +352,19 @@ def test_fixture_sample_trade_json() -> None:
     assert tx["type"] == "TRADE"
     assert trade_fingerprint(tx)
     assert is_processed_trade(tx, time.time()) is True
+
+
+def test_player_points_by_id_reads_player_scores_rows() -> None:
+    payload = {
+        "playerScores": {
+            "playerScore": [
+                {"id": "16257", "score": "213.20"},
+                {"id": "17000", "points": "367.4"},
+                {"id": "17001", "fantasyPoints": "12"},
+            ]
+        }
+    }
+    points = player_points_by_id(payload)
+    assert points["16257"] == 213.2
+    assert points["17000"] == 367.4
+    assert points["17001"] == 12.0

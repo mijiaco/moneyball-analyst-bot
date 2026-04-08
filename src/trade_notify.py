@@ -6,6 +6,8 @@ import argparse
 import asyncio
 import json
 import os
+import random
+import re
 import sys
 import time
 from pathlib import Path
@@ -16,8 +18,34 @@ from dotenv import load_dotenv
 from src.mfl_client import (
     MflClient,
     franchise_names_from_league,
+    player_points_by_id,
     player_salaries_by_franchise,
 )
+
+TRADE_COMMENTARY_LINES: tuple[str, ...] = (
+    "What a trade! Just got off the phone with my sources, and this one has the league buzzing.",
+    "Sources say this move came together fast - and yes, somebody definitely said 'all in.'",
+    "I am told the phones were absolutely melting for this deal. Let's get to the details.",
+    "This trade has major '3 a.m. group chat' energy, and the paperwork is already in.",
+    "Big board shake-up: this one feels like a chess move with extra chaos.",
+    "League sources: one side is buying upside, the other side is buying peace and quiet.",
+    "This is the kind of deal that makes every rival manager pretend they saw it coming.",
+    "Breaking-ish: this trade just dropped and my coffee suddenly tastes like deadlines.",
+)
+
+TRADE_BAIT_COMMENTARY_LINES: tuple[str, ...] = (
+    "Trade bait alert: the market is open and somebody is testing everyone's self-control.",
+    "I'm hearing this manager is taking calls, texts, and probably carrier pigeons for offers.",
+    "Sources: this listing is less 'window shopping' and more 'make me an offer I can't ignore.'",
+    "Another trade bait post is up, and yes, the asking price is described as 'respectfully spicy.'",
+    "The trade block just got louder - contenders are circling and calculators are out.",
+    "Market watch: this team is signaling they're ready to talk business today.",
+)
+
+
+def random_trade_commentary(*, trade_bait: bool = False) -> str:
+    lines = TRADE_BAIT_COMMENTARY_LINES if trade_bait else TRADE_COMMENTARY_LINES
+    return random.choice(lines)
 
 
 def _normalize_gave_up_field(raw: str | None) -> str:
@@ -196,7 +224,45 @@ def is_processed_trade(tx: dict[str, Any], now_unix: float | None = None) -> boo
 def _split_gave_up(raw: str | None) -> list[str]:
     if not raw:
         return []
-    return [p.strip() for p in raw.split(",") if p.strip()]
+    text = raw.strip()
+    if not text:
+        return []
+    if ";" in text:
+        return [p.strip() for p in text.split(";") if p.strip()]
+    comma_parts = [p.strip() for p in text.split(",") if p.strip()]
+    if not comma_parts:
+        return []
+    # Only split on commas for machine-style tokens.
+    if all(
+        part.startswith("DP_")
+        or part.startswith("FP_")
+        or re.fullmatch(r"\d+", part) is not None
+        for part in comma_parts
+    ):
+        return comma_parts
+    return [text.rstrip(",")]
+
+
+def _build_player_name_index(players: dict[str, str]) -> dict[str, str]:
+    """
+    Build a normalized player label -> player id index.
+    Keep only unique labels to avoid ambiguous salary lookups.
+    """
+    by_name: dict[str, str] = {}
+    duplicates: set[str] = set()
+    for pid, label in players.items():
+        key = " ".join(str(label).strip().split()).casefold()
+        if not key:
+            continue
+        existing_pid = by_name.get(key)
+        if existing_pid is None:
+            by_name[key] = pid
+            continue
+        if existing_pid != pid:
+            duplicates.add(key)
+    for dup in duplicates:
+        by_name.pop(dup, None)
+    return by_name
 
 
 def format_future_pick_token(token: str, franchise_names: dict[str, str]) -> str:
@@ -285,6 +351,8 @@ def format_asset_list(
     franchise_names: dict[str, str],
     sending_franchise_id: str,
     salaries_by_franchise: dict[str, dict[str, str]],
+    points_by_player_id: dict[str, float] | None = None,
+    player_name_to_id: dict[str, str] | None = None,
 ) -> str:
     tokens = _split_gave_up(gave_up)
     if not tokens:
@@ -296,12 +364,26 @@ def format_asset_list(
         elif t.startswith("FP_"):
             lines.append(format_future_pick_token(t, franchise_names))
         else:
-            label = players.get(t, f"Player id {t}")
+            resolved_token = t
+            label = players.get(t)
+            if label is None and player_name_to_id is not None:
+                name_key = " ".join(t.strip().split()).casefold()
+                resolved_token = player_name_to_id.get(name_key, t)
+                label = players.get(resolved_token)
+            if label is None:
+                label = t if not t.isdigit() else f"Player id {t}"
             sal = _salary_for_player_on_franchise(
-                salaries_by_franchise, sending_franchise_id, t
+                salaries_by_franchise, sending_franchise_id, resolved_token
             )
-            if sal is not None:
+            points = None
+            if points_by_player_id is not None:
+                points = points_by_player_id.get(str(resolved_token))
+            if sal is not None and points is not None:
+                label = f"{label} (${sal}, {points:.2f} pts)"
+            elif sal is not None:
                 label = f"{label} (${sal})"
+            elif points is not None:
+                label = f"{label} ({points:.2f} pts)"
             lines.append(label)
     return "\n".join(f"* {line}" for line in lines)
 
@@ -312,8 +394,10 @@ def format_trade_text(
     players: dict[str, str],
     season_year: int,
     salaries_by_franchise: dict[str, dict[str, str]] | None = None,
+    points_by_player_id: dict[str, float] | None = None,
 ) -> str:
     salaries = salaries_by_franchise if salaries_by_franchise is not None else {}
+    player_name_to_id = _build_player_name_index(players)
     f1 = str(tx.get("franchise", ""))
     f2 = str(tx.get("franchise2", ""))
     name1 = franchise_names.get(f1, f"Franchise {f1}")
@@ -325,6 +409,8 @@ def format_trade_text(
         franchise_names,
         f1,
         salaries,
+        points_by_player_id,
+        player_name_to_id,
     )
     side2 = format_asset_list(
         tx.get("franchise2_gave_up"),
@@ -333,13 +419,15 @@ def format_trade_text(
         franchise_names,
         f2,
         salaries,
+        points_by_player_id,
+        player_name_to_id,
     )
     comments = (tx.get("comments") or "").strip()
     header = f"**{name1}** sends:\n{side1}\n**{name2}** sends:\n{side2}"
     if comments:
         safe = comments.replace("`", "'")[:500]
         header += f"\n_Comments:_ {safe}"
-    return header
+    return f"{random_trade_commentary()}\n\n{header}"
 
 
 def format_trade_bait_text(
@@ -348,8 +436,10 @@ def format_trade_bait_text(
     players: dict[str, str],
     season_year: int,
     salaries_by_franchise: dict[str, dict[str, str]] | None = None,
+    points_by_player_id: dict[str, float] | None = None,
 ) -> str:
     salaries = salaries_by_franchise if salaries_by_franchise is not None else {}
+    player_name_to_id = _build_player_name_index(players)
     fid = str(tb.get("franchise_id", ""))
     team_name = franchise_names.get(fid, f"Franchise {fid}")
     give_up = format_asset_list(
@@ -359,13 +449,15 @@ def format_trade_bait_text(
         franchise_names,
         fid,
         salaries,
+        points_by_player_id,
+        player_name_to_id,
     )
     wants = (tb.get("inExchangeFor") or "").strip()
     body = f"**{team_name}** is offering:\n{give_up}"
     if wants:
         safe_wants = wants.replace("`", "'")[:500]
         body += f"\n**Looking for:**\n* {safe_wants}"
-    return body
+    return f"{random_trade_commentary(trade_bait=True)}\n\n{body}"
 
 
 def load_seen(path: Path) -> set[str]:
@@ -428,11 +520,14 @@ async def dry_run(apply_dedupe: bool, *, last_trade_only: bool = False) -> int:
         players = await client.get_players_map()
         await client.sleep_between_exports()
         rosters_json = await client.fetch_rosters()
+        await client.sleep_between_exports()
+        scores_json = await client.fetch_player_scores_current_year()
     finally:
         await client.aclose()
 
     franchise_names = franchise_names_from_league(league_json)
     salaries = player_salaries_by_franchise(rosters_json)
+    points_by_player_id = player_points_by_id(scores_json)
     now = time.time()
 
     if last_trade_only:
@@ -442,7 +537,11 @@ async def dry_run(apply_dedupe: bool, *, last_trade_only: bool = False) -> int:
             return 0
         trades_only.sort(key=lambda t: trade_submitted_unix(t) or 0.0)
         tx = trades_only[-1]
-        print(format_trade_text(tx, franchise_names, players, season_year, salaries))
+        print(
+            format_trade_text(
+                tx, franchise_names, players, season_year, salaries, points_by_player_id
+            )
+        )
         pending = not is_processed_trade(tx, now)
         phase = "pending veto window" if pending else "processed"
         print(
@@ -475,7 +574,11 @@ async def dry_run(apply_dedupe: bool, *, last_trade_only: bool = False) -> int:
                 seen.add(key)
                 seeded += 1
             continue
-        print(format_trade_text(tx, franchise_names, players, season_year, salaries))
+        print(
+            format_trade_text(
+                tx, franchise_names, players, season_year, salaries, points_by_player_id
+            )
+        )
         print("---")
         new_count += 1
         if apply_dedupe:
