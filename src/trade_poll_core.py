@@ -9,6 +9,7 @@ import discord
 from src.mfl_client import (
     MflClient,
     franchise_names_from_league,
+    player_points_by_id,
     player_salaries_by_franchise,
 )
 from src.trade_notify import (
@@ -63,7 +64,14 @@ async def poll_trades_for_new_messages(
     players = await mfl.get_players_map()
     await mfl.sleep_between_exports()
     rosters_json = await mfl.fetch_rosters()
+    await mfl.sleep_between_exports()
+    try:
+        player_scores_json = await mfl.fetch_player_scores_current_year()
+    except Exception:
+        # Keep trade polling alive even when playerScores export is unavailable.
+        player_scores_json = {}
     salaries_by_franchise = player_salaries_by_franchise(rosters_json)
+    points_by_player_id = player_points_by_id(player_scores_json)
 
     franchise_names = franchise_names_from_league(league_json)
     now = time.time()
@@ -90,7 +98,12 @@ async def poll_trades_for_new_messages(
             updated = True
             continue
         body = format_trade_text(
-            tx, franchise_names, players, season_year, salaries_by_franchise
+            tx,
+            franchise_names,
+            players,
+            season_year,
+            salaries_by_franchise,
+            points_by_player_id,
         )
         if len(body) > DISCORD_DESCRIPTION_LIMIT:
             body = body[: DISCORD_DESCRIPTION_LIMIT - 3] + "..."
@@ -106,7 +119,12 @@ async def poll_trades_for_new_messages(
                 updated = True
                 continue
             body = format_trade_bait_text(
-                tb, franchise_names, players, season_year, salaries_by_franchise
+                tb,
+                franchise_names,
+                players,
+                season_year,
+                salaries_by_franchise,
+                points_by_player_id,
             )
             if len(body) > DISCORD_DESCRIPTION_LIMIT:
                 body = body[: DISCORD_DESCRIPTION_LIMIT - 3] + "..."

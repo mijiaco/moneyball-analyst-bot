@@ -35,6 +35,8 @@ class MflClient:
         user_agent: str | None = None,
         players_cache_path: Path | None = None,
     ) -> None:
+        self._host = host
+        self._year = year
         self._base = f"https://{host}/{year}/export"
         self._league_id = league_id
         self._api_key = api_key or None
@@ -95,6 +97,32 @@ class MflClient:
         data = await self._get_json({"TYPE": "tradeBait"})
         block = data.get("tradeBaits") or {}
         return _normalize_transaction_list(block.get("tradeBait"))
+
+    async def fetch_player_scores_current_year(self) -> dict[str, Any]:
+        """
+        Fetch player scores using MFL's default current-year export endpoint.
+        This is intentionally separate from the configured league year.
+        """
+        params = {"L": self._league_id, "TYPE": "playerScores", "JSON": "1"}
+        if self._api_key:
+            params["APIKEY"] = self._api_key
+        headers = dict(self._client.headers)
+        last_err: BaseException | None = None
+        for attempt in range(3):
+            try:
+                response = await self._client.get(
+                    f"https://{self._host}/export",
+                    params=params,
+                    headers=headers,
+                )
+                response.raise_for_status()
+                data = response.json()
+                return data if isinstance(data, dict) else {}
+            except (httpx.HTTPError, OSError, ValueError) as exc:
+                last_err = exc
+                await asyncio.sleep(1.0 * (attempt + 1))
+        assert last_err is not None
+        raise last_err
 
     async def _fetch_players_live(self) -> dict[str, Any]:
         data = await self._get_json({"TYPE": "players"})
@@ -194,3 +222,30 @@ def franchise_names_from_league(league_json: dict[str, Any]) -> dict[str, str]:
         name = row.get("name") or fid
         out[str(fid)] = str(name)
     return out
+
+
+def player_points_by_id(scores_json: dict[str, Any]) -> dict[str, float]:
+    """
+    player_id -> points from playerScores export.
+    Accepts multiple possible point field names to be resilient to format variants.
+    """
+    points_out: dict[str, float] = {}
+    block = scores_json.get("playerScores") or scores_json.get("playerscores") or {}
+    rows = _normalize_transaction_list(block.get("playerScore") or block.get("player"))
+    for row in rows:
+        pid = row.get("id")
+        if pid is None:
+            continue
+        raw_points = (
+            row.get("score")
+            or row.get("points")
+            or row.get("fantasyPoints")
+            or row.get("ytd_points")
+        )
+        if raw_points is None or str(raw_points).strip() == "":
+            continue
+        try:
+            points_out[str(pid)] = float(raw_points)
+        except (TypeError, ValueError):
+            continue
+    return points_out
