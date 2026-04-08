@@ -2,15 +2,18 @@ name: MFL trade poll
 
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    # Poll every 2 minutes (GitHub may start a few seconds late).
+    - cron: "*/2 * * * *"
   workflow_dispatch:
 
 permissions:
   contents: write
 
+# One poll at a time so seen_trades.json and Discord posts stay consistent.
+# Do not cancel an in-flight run when another is scheduled — that was delaying or dropping posts.
 concurrency:
   group: mfl-trade-poll
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   poll:
