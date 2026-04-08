@@ -116,8 +116,14 @@ def trade_dedupe_resolved(
     )
     base_stable, key_p, key_c = trade_notification_key_variants(tx, now_unix)
 
-    if key in seen or base_stable in seen or key_p in seen or key_c in seen:
-        return (True, False)
+    if notify_once_per_trade:
+        if key in seen or base_stable in seen or key_p in seen or key_c in seen:
+            return (True, False)
+    else:
+        # Phase-aware mode: only suppress duplicates for the same phase key.
+        # A legacy base key still means this trade was already announced once.
+        if key in seen or base_stable in seen:
+            return (True, False)
 
     for leg in _legacy_trade_seen_keys(tx):
         if leg in seen:

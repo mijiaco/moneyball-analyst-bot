@@ -82,6 +82,26 @@ def test_trade_dedupe_resolved_migrates_legacy_seen_key() -> None:
     assert trade_notification_key(tx, now, include_phase=False) in seen
 
 
+def test_trade_dedupe_resolved_allows_pending_and_processed_when_phase_mode() -> None:
+    now = 2_000_000.0
+    tx_pending = {
+        "timestamp": "1775415606",
+        "franchise": "0009",
+        "franchise2": "0024",
+        "franchise1_gave_up": "16257,DP_0_21,",
+        "franchise2_gave_up": "DP_1_2,",
+        "expires": str(int(now + 3600)),
+    }
+    key_pending = trade_notification_key(tx_pending, now, include_phase=True)
+    seen = {key_pending}
+    tx_processed = dict(tx_pending, expires=str(int(now - 1)))
+    skip, migrated = trade_dedupe_resolved(
+        tx_processed, seen, now, notify_once_per_trade=False
+    )
+    assert skip is False
+    assert migrated is False
+
+
 def test_trade_notification_key_default_is_single_key() -> None:
     now = 2_000_000.0
     tx_p = {"expires": str(int(now + 3600)), "timestamp": "1", "franchise": "0001"}
