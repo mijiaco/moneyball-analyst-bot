@@ -103,7 +103,8 @@ class MflClient:
         Fetch player scores using MFL's default current-year export endpoint.
         This is intentionally separate from the configured league year.
         """
-        params = {"L": self._league_id, "TYPE": "playerScores", "JSON": "1"}
+        # Request season-to-date totals (not per-week scores).
+        params = {"L": self._league_id, "TYPE": "playerScores", "JSON": "1", "W": "YTD"}
         if self._api_key:
             params["APIKEY"] = self._api_key
         headers = dict(self._client.headers)
