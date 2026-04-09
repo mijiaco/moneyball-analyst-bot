@@ -851,24 +851,28 @@ def format_roster_breakdown_report_text(
     title: str = "Players by Team (Active / Taxi / IR)",
 ) -> str:
     team_ids = set(franchise_names.keys()) | set(slot_counts_by_franchise.keys())
-    sorted_team_ids = sorted(
-        team_ids,
-        key=lambda team_id: franchise_names.get(team_id, f"Franchise {team_id}").casefold(),
-    )
-    if not sorted_team_ids:
+    if not team_ids:
         return f"{title}\n\nNo roster data found."
-    lines = [title, ""]
-    for team_id in sorted_team_ids:
-        team_name = franchise_names.get(team_id, f"Franchise {team_id}")
+    ranking: list[tuple[str, int, int, int, int]] = []
+    for team_id in team_ids:
         counts = slot_counts_by_franchise.get(team_id, {})
         active_count = int(counts.get("active", 0))
         taxi_count = int(counts.get("taxi", 0))
         ir_count = int(counts.get("ir", 0))
-        lines.append(team_name)
-        lines.append(f"* Active Roster: {active_count} Players")
-        lines.append(f"* Taxi Squad: {taxi_count} Players")
-        lines.append(f"* IR: {ir_count} Players")
-        lines.append("")
+        total_players = active_count + taxi_count + ir_count
+        ranking.append((team_id, total_players, active_count, taxi_count, ir_count))
+    ranking.sort(
+        key=lambda row: (
+            -row[1],
+            franchise_names.get(row[0], f"Franchise {row[0]}").casefold(),
+        )
+    )
+    lines = [title, ""]
+    for index, (team_id, _total_players, active_count, taxi_count, ir_count) in enumerate(
+        ranking, start=1
+    ):
+        team_name = franchise_names.get(team_id, f"Franchise {team_id}")
+        lines.append(f"{index}) {team_name} - {active_count} / {taxi_count} / {ir_count}")
     return "\n".join(lines).rstrip()
 
 

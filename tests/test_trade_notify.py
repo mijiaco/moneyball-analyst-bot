@@ -585,11 +585,12 @@ def test_roster_slot_counts_by_franchise_splits_active_taxi_ir() -> None:
 
 
 def test_format_roster_breakdown_report_text_renders_expected_lines() -> None:
-    franchise_names = {"0010": "Glass Joe's Revenge"}
-    slot_counts = {"0010": {"active": 23, "taxi": 0, "ir": 0}}
+    franchise_names = {"0010": "Glass Joe's Revenge", "0002": "#NAME?"}
+    slot_counts = {
+        "0010": {"active": 23, "taxi": 0, "ir": 0},
+        "0002": {"active": 26, "taxi": 0, "ir": 0},
+    }
     text = format_roster_breakdown_report_text(franchise_names, slot_counts)
     assert "Players by Team (Active / Taxi / IR)" in text
-    assert "Glass Joe's Revenge" in text
-    assert "* Active Roster: 23 Players" in text
-    assert "* Taxi Squad: 0 Players" in text
-    assert "* IR: 0 Players" in text
+    assert "1) #NAME? - 26 / 0 / 0" in text
+    assert "2) Glass Joe's Revenge - 23 / 0 / 0" in text
