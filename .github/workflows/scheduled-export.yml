@@ -1,9 +1,22 @@
+# Poll trigger: use an external free cron (e.g. cron-job.org) — GitHub's native
+# `schedule` event is often delayed 5–30+ minutes under load; dispatch is timely.
+#
+# Option A — workflow_dispatch (Actions: Read and write on this repo for the PAT):
+#   POST https://api.github.com/repos/OWNER/REPO/actions/workflows/scheduled-export.yml/dispatches
+#   Headers: Accept: application/vnd.github+json  Authorization: Bearer <PAT>  Content-Type: application/json
+#   Body: {"ref":"main"}
+#
+# Option B — repository_dispatch (Contents: Read and write on this repo for the PAT):
+#   POST https://api.github.com/repos/OWNER/REPO/dispatches
+#   Same headers; Body: {"event_type":"mfl-poll","client_payload":{}}
+#
+# Store the PAT only in the cron service, never in the repo. Interval: e.g. every 2–5 minutes.
 name: scheduled-export
 
 on:
-  schedule:
-    - cron: "* * * * *"
   workflow_dispatch:
+  repository_dispatch:
+    types: [mfl-poll]
 
 permissions:
   contents: write
