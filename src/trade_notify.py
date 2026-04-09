@@ -19,6 +19,7 @@ from dotenv import load_dotenv
 
 from src.mfl_client import (
     MflClient,
+    draft_picks_by_franchise,
     franchise_names_from_league,
     player_points_by_id,
     player_contract_years_by_franchise,
@@ -701,12 +702,52 @@ def current_season_lookback_days(season_year: int) -> int:
     return max(1, delta_days)
 
 
+def format_draft_picks_report_text(
+    franchise_names: dict[str, str],
+    current_year_picks_by_franchise: dict[str, list[str]],
+    future_year_picks_by_franchise: dict[str, list[str]],
+    *,
+    title: str = "Draft Picks Report (Current + Future)",
+) -> str:
+    team_ids = set(franchise_names.keys())
+    team_ids.update(current_year_picks_by_franchise.keys())
+    team_ids.update(future_year_picks_by_franchise.keys())
+    sorted_team_ids = sorted(
+        team_ids,
+        key=lambda fid: franchise_names.get(fid, f"Franchise {fid}").casefold(),
+    )
+
+    if not sorted_team_ids:
+        return f"{title}\n\nNo franchise data found."
+
+    lines = [title, ""]
+    for franchise_id in sorted_team_ids:
+        team_name = franchise_names.get(franchise_id, f"Franchise {franchise_id}")
+        current_lines = current_year_picks_by_franchise.get(franchise_id, [])
+        future_lines = future_year_picks_by_franchise.get(franchise_id, [])
+        lines.append(f"{team_name}")
+        lines.append("Current Year Picks:")
+        if current_lines:
+            lines.extend([f"* {entry}" for entry in current_lines])
+        else:
+            lines.append("* None")
+        lines.append("Future Picks:")
+        if future_lines:
+            lines.extend([f"* {entry}" for entry in future_lines])
+        else:
+            lines.append("* None")
+        lines.append("")
+
+    return "\n".join(lines).rstrip()
+
+
 async def dry_run(
     apply_dedupe: bool,
     *,
     last_trade_only: bool = False,
     top_traders_only: bool = False,
     top_traders_limit: int = 10,
+    draft_picks_report_only: bool = False,
 ) -> int:
     load_dotenv()
     connect = mfl_connect_settings()
@@ -740,11 +781,15 @@ async def dry_run(
         user_agent=user_agent,
         players_cache_path=players_cache,
     )
+    assets_json: dict[str, Any] = {}
     try:
         transactions_lookback = current_year_lookback if top_traders_only else lookback
         transactions = await client.fetch_transactions_trade_days(transactions_lookback)
         await client.sleep_between_exports()
         league_json = await client.fetch_league()
+        if draft_picks_report_only:
+            await client.sleep_between_exports()
+            assets_json = await client.fetch_assets()
         await client.sleep_between_exports()
         players = await client.get_players_map()
         await client.sleep_between_exports()
@@ -780,6 +825,18 @@ async def dry_run(
             ),
             file=sys.stderr,
         )
+        return 0
+
+    if draft_picks_report_only:
+        current_by_franchise, future_by_franchise = draft_picks_by_franchise(assets_json)
+        print(
+            format_draft_picks_report_text(
+                franchise_names,
+                current_by_franchise,
+                future_by_franchise,
+            )
+        )
+        print("(dry-run: draft picks report generated from assets export)", file=sys.stderr)
         return 0
 
     if last_trade_only:
@@ -886,6 +943,11 @@ def main() -> None:
         default=0,
         help="With --top-traders, number of ranked teams to print (0 = full list).",
     )
+    parser.add_argument(
+        "--draft-picks-report",
+        action="store_true",
+        help="With --dry-run, print each franchise's current and future draft picks.",
+    )
     args = parser.parse_args()
     if args.dry_run:
         if args.last_trade and args.with_dedupe:
@@ -894,6 +956,12 @@ def main() -> None:
             parser.error("--last-trade cannot be used with --top-traders")
         if args.with_dedupe and args.top_traders:
             parser.error("--with-dedupe cannot be used with --top-traders")
+        if args.last_trade and args.draft_picks_report:
+            parser.error("--last-trade cannot be used with --draft-picks-report")
+        if args.with_dedupe and args.draft_picks_report:
+            parser.error("--with-dedupe cannot be used with --draft-picks-report")
+        if args.top_traders and args.draft_picks_report:
+            parser.error("--top-traders cannot be used with --draft-picks-report")
         raise SystemExit(
             asyncio.run(
                 dry_run(
@@ -901,6 +969,7 @@ def main() -> None:
                     last_trade_only=args.last_trade,
                     top_traders_only=args.top_traders,
                     top_traders_limit=args.top_limit,
+                    draft_picks_report_only=args.draft_picks_report,
                 )
             )
         )

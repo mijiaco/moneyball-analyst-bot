@@ -7,12 +7,13 @@ import tempfile
 import time
 from pathlib import Path
 
-from src.mfl_client import player_points_by_id
+from src.mfl_client import draft_picks_by_franchise, player_points_by_id
 from src.trade_notify import (
     TRADE_BAIT_COMMENTARY_LINES,
     TRADE_COMMENTARY_LINES,
     format_trade_bait_text,
     format_draft_token,
+    format_draft_picks_report_text,
     format_future_pick_token,
     format_trade_text,
     is_trade_bait_too_old_to_announce,
@@ -491,3 +492,42 @@ def test_format_top_traders_text_renders_expected_lines() -> None:
     assert "Top Traders" in text
     assert "1. The Purple Curtain - 15 Trades" in text
     assert "2. Joker - 12 Trades" in text
+
+
+def test_draft_picks_by_franchise_parses_current_and_future() -> None:
+    assets_json = {
+        "assets": {
+            "franchise": [
+                {
+                    "id": "0001",
+                    "currentYearDraftPicks": {
+                        "draftPick": {"description": "Round 1.01", "pick": "DP_0_0"}
+                    },
+                    "futureYearDraftPicks": {
+                        "draftPick": [
+                            {
+                                "description": "Year 2027 Round 2 from Team B",
+                                "pick": "FP_0002_2027_2",
+                            }
+                        ]
+                    },
+                }
+            ]
+        }
+    }
+    current_map, future_map = draft_picks_by_franchise(assets_json)
+    assert current_map["0001"] == ["Round 1.01"]
+    assert future_map["0001"] == ["Year 2027 Round 2 from Team B"]
+
+
+def test_format_draft_picks_report_text_renders_sections() -> None:
+    franchise_names = {"0001": "Team A"}
+    current_map = {"0001": ["Round 1.01"]}
+    future_map = {"0001": ["Year 2027 Round 2 from Team B"]}
+    text = format_draft_picks_report_text(franchise_names, current_map, future_map)
+    assert "Draft Picks Report (Current + Future)" in text
+    assert "Team A" in text
+    assert "Current Year Picks:" in text
+    assert "* Round 1.01" in text
+    assert "Future Picks:" in text
+    assert "* Year 2027 Round 2 from Team B" in text

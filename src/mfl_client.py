@@ -98,6 +98,10 @@ class MflClient:
         block = data.get("tradeBaits") or {}
         return _normalize_transaction_list(block.get("tradeBait"))
 
+    async def fetch_assets(self) -> dict[str, Any]:
+        data = await self._get_json({"TYPE": "assets"})
+        return data if isinstance(data, dict) else {}
+
     async def fetch_player_scores_current_year(self) -> dict[str, Any]:
         """
         Fetch player scores using MFL's default current-year export endpoint.
@@ -314,3 +318,50 @@ def player_points_by_id(scores_json: dict[str, Any]) -> dict[str, float]:
         except (TypeError, ValueError):
             continue
     return points_out
+
+
+def draft_picks_by_franchise(
+    assets_json: dict[str, Any],
+) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    """
+    Return (current_year_picks, future_year_picks) by franchise id.
+    Values are human-readable description lines when available.
+    """
+    current_out: dict[str, list[str]] = {}
+    future_out: dict[str, list[str]] = {}
+    block = assets_json.get("assets") or {}
+    franchise_rows = _normalize_transaction_list(block.get("franchise"))
+    for franchise in franchise_rows:
+        franchise_id = franchise.get("id")
+        if franchise_id is None:
+            continue
+        franchise_id_str = str(franchise_id)
+
+        current_block = franchise.get("currentYearDraftPicks") or {}
+        future_block = franchise.get("futureYearDraftPicks") or {}
+        current_rows = _normalize_transaction_list(current_block.get("draftPick"))
+        future_rows = _normalize_transaction_list(future_block.get("draftPick"))
+
+        current_picks: list[str] = []
+        future_picks: list[str] = []
+
+        for row in current_rows:
+            description = str(row.get("description") or "").strip()
+            pick_token = str(row.get("pick") or "").strip()
+            if description:
+                current_picks.append(description)
+            elif pick_token:
+                current_picks.append(pick_token)
+
+        for row in future_rows:
+            description = str(row.get("description") or "").strip()
+            pick_token = str(row.get("pick") or "").strip()
+            if description:
+                future_picks.append(description)
+            elif pick_token:
+                future_picks.append(pick_token)
+
+        current_out[franchise_id_str] = current_picks
+        future_out[franchise_id_str] = future_picks
+
+    return current_out, future_out

@@ -59,65 +59,76 @@ jobs:
       - name: Run scheduled job
         run: python -m src.run_once
 
-      - name: Upload dedupe state (Contents API)
+      - name: Upload state files (Contents API)
         uses: actions/github-script@v8
         with:
           github-token: ${{ github.token }}
           script: |
             const fs = require("fs");
-            const filePath = "data/seen_trades.json";
-            if (!fs.existsSync(filePath)) {
-              core.setFailed("missing " + filePath);
-              return;
-            }
-            const newContent = fs.readFileSync(filePath, "utf8");
             const { owner, repo } = context.repo;
             const branch = context.ref.replace("refs/heads/", "");
-            const b64 = Buffer.from(newContent, "utf8").toString("base64");
 
-            for (let attempt = 1; attempt <= 10; attempt++) {
-              let remoteSha = null;
-              try {
-                const { data } = await github.rest.repos.getContent({
-                  owner,
-                  repo,
-                  path: filePath,
-                  ref: branch,
-                });
-                if (Array.isArray(data)) {
-                  throw new Error("path is a directory");
+            const filePaths = ["data/seen_trades.json", "data/reports_state.json"];
+
+            for (const filePath of filePaths) {
+              if (!fs.existsSync(filePath)) {
+                console.log("state file not present, skipping: " + filePath);
+                continue;
+              }
+              const newContent = fs.readFileSync(filePath, "utf8");
+              const b64 = Buffer.from(newContent, "utf8").toString("base64");
+              let committed = false;
+
+              for (let attempt = 1; attempt <= 10; attempt++) {
+                let remoteSha = null;
+                try {
+                  const { data } = await github.rest.repos.getContent({
+                    owner,
+                    repo,
+                    path: filePath,
+                    ref: branch,
+                  });
+                  if (Array.isArray(data)) {
+                    throw new Error("path is a directory");
+                  }
+                  remoteSha = data.sha;
+                  const remoteText = Buffer.from(data.content, "base64").toString("utf8");
+                  if (remoteText === newContent) {
+                    console.log("state unchanged vs remote; skip: " + filePath);
+                    committed = true;
+                    break;
+                  }
+                } catch (e) {
+                  if (e.status !== 404) {
+                    throw e;
+                  }
                 }
-                remoteSha = data.sha;
-                const remoteText = Buffer.from(data.content, "base64").toString("utf8");
-                if (remoteText === newContent) {
-                  console.log("dedupe state unchanged vs remote; skip commit");
-                  return;
-                }
-              } catch (e) {
-                if (e.status !== 404) {
+
+                try {
+                  await github.rest.repos.createOrUpdateFileContents({
+                    owner,
+                    repo,
+                    path: filePath,
+                    message: "chore: sync scheduler state",
+                    content: b64,
+                    branch,
+                    ...(remoteSha ? { sha: remoteSha } : {}),
+                  });
+                  console.log("Committed state via API: " + filePath);
+                  committed = true;
+                  break;
+                } catch (e) {
+                  const retry = (e.status === 409 || e.status === 422) && attempt < 10;
+                  if (retry) {
+                    console.log(`API commit conflict (${e.status}) on ${filePath}, retry ${attempt}`);
+                    await new Promise((r) => setTimeout(r, 4000));
+                    continue;
+                  }
                   throw e;
                 }
               }
-
-              try {
-                await github.rest.repos.createOrUpdateFileContents({
-                  owner,
-                  repo,
-                  path: filePath,
-                  message: "chore: sync dedupe state",
-                  content: b64,
-                  branch,
-                  ...(remoteSha ? { sha: remoteSha } : {}),
-                });
-                console.log("Committed dedupe state via API");
+              if (!committed) {
+                core.setFailed("failed to commit state file: " + filePath);
                 return;
-              } catch (e) {
-                const retry = (e.status === 409 || e.status === 422) && attempt < 10;
-                if (retry) {
-                  console.log(`API commit conflict (${e.status}), retry ${attempt}`);
-                  await new Promise((r) => setTimeout(r, 4000));
-                  continue;
-                }
-                throw e;
               }
             }
