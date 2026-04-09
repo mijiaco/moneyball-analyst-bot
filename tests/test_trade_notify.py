@@ -30,6 +30,39 @@ from src.trade_notify import (
 )
 
 
+def test_trade_fingerprint_ignores_transaction_id_for_stability_with_seen_file() -> None:
+    base = {
+        "timestamp": "1775583103",
+        "franchise": "0009",
+        "franchise2": "0024",
+        "franchise1_gave_up": "16257,",
+        "franchise2_gave_up": "DP_1_2,",
+    }
+    with_tid = dict(base, transaction_id="999888")
+    assert trade_fingerprint(base) == trade_fingerprint(with_tid)
+    assert "1775583103" in trade_fingerprint(base)
+    assert not str(trade_fingerprint(base)).startswith("id|")
+
+
+def test_trade_dedupe_resolved_migrates_id_prefixed_seen_key() -> None:
+    now = 2_000_000.0
+    tx = {
+        "timestamp": "1775583103",
+        "franchise": "0009",
+        "franchise2": "0024",
+        "franchise1_gave_up": "16257,",
+        "franchise2_gave_up": "DP_1_2,",
+        "transaction_id": "abc123",
+        "expires": str(int(now - 1)),
+    }
+    stable = trade_notification_key(tx, now, include_phase=False)
+    seen = {"id|abc123"}
+    skip, migrated = trade_dedupe_resolved(tx, seen, now, notify_once_per_trade=True)
+    assert skip is True
+    assert migrated is True
+    assert stable in seen
+
+
 def test_trade_fingerprint_ignores_comments_and_normalizes_asset_order() -> None:
     base = {
         "timestamp": "1775415606",

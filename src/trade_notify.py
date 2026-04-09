@@ -102,11 +102,11 @@ def _normalize_gave_up_field(raw: str | None) -> str:
 def trade_fingerprint(tx: dict[str, Any]) -> str:
     """
     Dedupe identity for new posts: stable across comment edits and gave_up token order.
-    Uses MFL transaction id when present; otherwise timestamp + franchises + normalized assets.
+
+    Always uses timestamp + franchises + normalized assets (not MFL transaction_id / id).
+    If we keyed by id, a later API change that starts sending ids would not match keys already
+    stored in seen_trades.json and every trade in the lookback window would re-announce.
     """
-    tid = tx.get("transaction_id") or tx.get("id")
-    if tid is not None and str(tid).strip() != "":
-        return f"id|{str(tid).strip()}"
     parts = [
         str(tx.get("timestamp", "")),
         str(tx.get("franchise", "")),
@@ -160,6 +160,18 @@ def trade_dedupe_resolved(
         tx, now_unix, include_phase=not notify_once_per_trade
     )
     base_stable, key_p, key_c = trade_notification_key_variants(tx, now_unix)
+
+    # If seen ever contained id|-prefixed keys (short-lived id-based fingerprint), still skip
+    # and migrate to the stable key so we do not double-announce.
+    tid = tx.get("transaction_id") or tx.get("id")
+    if tid is not None and str(tid).strip() != "":
+        id_base = f"id|{str(tid).strip()}"
+        id_variants = {id_base, f"{id_base}|P", f"{id_base}|C"}
+        if seen.intersection(id_variants):
+            if key not in seen:
+                seen.add(key)
+                return (True, True)
+            return (True, False)
 
     if notify_once_per_trade:
         if key in seen or base_stable in seen or key_p in seen or key_c in seen:
