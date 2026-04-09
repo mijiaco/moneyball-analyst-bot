@@ -94,7 +94,11 @@ class MflClient:
         return data if isinstance(data, dict) else {}
 
     async def fetch_trade_baits(self) -> list[dict[str, Any]]:
-        data = await self._get_json({"TYPE": "tradeBait"})
+        # INCLUDE_DRAFT_PICKS is required for DP_/FP_ tokens in willGiveUp; without it the
+        # site can still show picks while the export omits them (empty offering in Discord).
+        data = await self._get_json(
+            {"TYPE": "tradeBait", "INCLUDE_DRAFT_PICKS": "1"}
+        )
         block = data.get("tradeBaits") or {}
         return _normalize_transaction_list(block.get("tradeBait"))
 
