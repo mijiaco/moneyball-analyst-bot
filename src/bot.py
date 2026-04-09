@@ -46,7 +46,8 @@ class TradeBot(discord.Client):
             ws_connector=ws_connector,
         )
         self._channel_id: int = int(os.environ["DISCORD_CHANNEL_ID"])
-        self._poll_interval = int(os.environ.get("MFL_POLL_INTERVAL_SECONDS", "180"))
+        # Default 60s if unset; override with MFL_POLL_INTERVAL_SECONDS (e.g. 30).
+        self._poll_interval = int(os.environ.get("MFL_POLL_INTERVAL_SECONDS", "60"))
         self._lookback_days = int(os.environ.get("MFL_TRADE_LOOKBACK_DAYS", "14"))
         self._host = os.environ.get("MFL_HOST", "www45.myfantasyleague.com")
         self._year = os.environ.get("MFL_YEAR", "2026")

@@ -2,8 +2,8 @@ name: MFL trade poll
 
 on:
   schedule:
-    # Poll every 2 minutes (GitHub may start a few seconds late).
-    - cron: "*/2 * * * *"
+    # Every minute (fastest reliable GitHub schedule; runner may start a bit after :00).
+    - cron: "* * * * *"
   workflow_dispatch:
 
 permissions:
