@@ -1,4 +1,4 @@
-"""Unit tests for trade fingerprinting, filtering, and formatting (no MFL network)."""
+"""Unit tests for trade fingerprinting, filtering, and formatting (no network)."""
 
 from __future__ import annotations
 

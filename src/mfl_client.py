@@ -1,4 +1,4 @@
-"""Async MyFantasyLeague export API client with players file cache."""
+"""Async HTTP client for league JSON exports with optional players file cache."""
 
 from __future__ import annotations
 

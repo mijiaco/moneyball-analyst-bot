@@ -1,4 +1,4 @@
-"""Single MFL poll + Discord REST posts (no gateway). For GitHub Actions cron."""
+"""One poll cycle and outbound REST posts (no gateway). For scheduled runners."""
 
 from __future__ import annotations
 
@@ -14,6 +14,11 @@ import httpx
 from dotenv import load_dotenv
 
 from src.mfl_client import MflClient
+from src.mfl_env import (
+    missing_mfl_connect_env_names,
+    mfl_connect_env_help_suffix,
+    mfl_connect_settings,
+)
 from src.trade_notify import env_bool, load_seen, save_seen
 from src.trade_poll_core import poll_trades_for_new_messages
 
@@ -74,16 +79,28 @@ async def _async_main() -> int:
     seen = load_seen(seen_path)
 
     lookback = int(os.environ.get("MFL_TRADE_LOOKBACK_DAYS", "14"))
-    announce_max_age = float(os.environ.get("MFL_ANNOUNCE_MAX_AGE_HOURS", "48"))
+    _max_age_raw = (os.environ.get("MFL_ANNOUNCE_MAX_AGE_HOURS") or "").strip()
+    announce_max_age = float(_max_age_raw) if _max_age_raw else 48.0
     announce_pending = env_bool("MFL_ANNOUNCE_PENDING_TRADES", True)
     notify_once_per_trade = env_bool("MFL_NOTIFY_ONCE_PER_TRADE", True)
     announce_trade_bait = env_bool("MFL_ANNOUNCE_TRADE_BAIT", True)
-    season_year = int(os.environ.get("MFL_YEAR", "2026"))
+
+    connect = mfl_connect_settings()
+    if connect is None:
+        miss = ", ".join(missing_mfl_connect_env_names())
+        logger.error(
+            "Missing required env: %s. %s",
+            miss,
+            mfl_connect_env_help_suffix(),
+        )
+        return 1
+    host, year, league_id = connect
+    season_year = int(year)
 
     mfl = MflClient(
-        host=os.environ.get("MFL_HOST", "www45.myfantasyleague.com"),
-        year=os.environ.get("MFL_YEAR", "2026"),
-        league_id=os.environ.get("MFL_LEAGUE_ID", "40468"),
+        host=host,
+        year=year,
+        league_id=league_id,
         api_key=os.environ.get("MFL_API_KEY") or None,
         user_agent=os.environ.get("MFL_USER_AGENT") or None,
         players_cache_path=players_cache,
@@ -100,10 +117,10 @@ async def _async_main() -> int:
             announce_trade_bait=announce_trade_bait,
         )
     except httpx.HTTPStatusError as exc:
-        logger.exception("MFL HTTP error: %s", exc)
+        logger.exception("Upstream HTTP error: %s", exc)
         return 1
     except Exception:
-        logger.exception("MFL fetch failed")
+        logger.exception("Upstream fetch failed")
         return 1
     finally:
         await mfl.aclose()
@@ -129,7 +146,7 @@ async def _async_main() -> int:
 
     if updated:
         save_seen(seen_path, seen)
-        logger.info("Updated seen trades (%s keys)", len(seen))
+        logger.info("Updated dedupe state (%s keys)", len(seen))
     return 0
 
 

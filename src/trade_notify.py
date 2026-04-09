@@ -24,6 +24,11 @@ from src.mfl_client import (
     player_contract_years_by_franchise,
     player_salaries_by_franchise,
 )
+from src.mfl_env import (
+    missing_mfl_connect_env_names,
+    mfl_connect_env_help_suffix,
+    mfl_connect_settings,
+)
 
 TRADE_COMMENTARY_LINES: tuple[str, ...] = (
     "What a trade! Just got off the phone with my sources, and this one has the league buzzing.",
@@ -704,9 +709,15 @@ async def dry_run(
     top_traders_limit: int = 10,
 ) -> int:
     load_dotenv()
-    host = os.environ.get("MFL_HOST", "www45.myfantasyleague.com")
-    year = os.environ.get("MFL_YEAR", "2026")
-    league_id = os.environ.get("MFL_LEAGUE_ID", "40468")
+    connect = mfl_connect_settings()
+    if connect is None:
+        miss = ", ".join(missing_mfl_connect_env_names())
+        print(
+            f"Missing required env: {miss}. {mfl_connect_env_help_suffix()}",
+            file=sys.stderr,
+        )
+        return 1
+    host, year, league_id = connect
     api_key = os.environ.get("MFL_API_KEY") or None
     user_agent = os.environ.get("MFL_USER_AGENT") or None
     lookback = int(os.environ.get("MFL_TRADE_LOOKBACK_DAYS", "14"))
@@ -792,7 +803,7 @@ async def dry_run(
         pending = not is_processed_trade(tx, now)
         phase = "pending veto window" if pending else "processed"
         print(
-            f"(dry-run: latest trade by MFL timestamp — {phase}; not posted, seen unchanged)",
+            f"(dry-run: latest trade by upstream timestamp — {phase}; not posted, seen unchanged)",
             file=sys.stderr,
         )
         return 0
@@ -846,11 +857,13 @@ async def dry_run(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Fetch MFL trades and print formatted output.")
+    parser = argparse.ArgumentParser(
+        description="Fetch league trades and print formatted output.",
+    )
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Fetch from MFL and print processed trades (uses .env).",
+        help="Fetch from configured league and print processed trades (uses .env).",
     )
     parser.add_argument(
         "--with-dedupe",

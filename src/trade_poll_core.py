@@ -1,4 +1,4 @@
-"""Shared MFL fetch + trade selection logic for the Discord bot and GitHub Actions runner."""
+"""Shared fetch + trade selection for gateway client and scheduled runner."""
 
 from __future__ import annotations
 
@@ -52,7 +52,7 @@ async def poll_trades_for_new_messages(
     announce_trade_bait: bool,
 ) -> tuple[list[tuple[str, TradeMessagePayload]], bool]:
     """
-    Fetch MFL. Mutates seen only for old-trade silent seeds.
+    Fetch league data. Mutates seen only for old-trade silent seeds.
     Returns (list of (dedupe_key, payload) to post — keys not yet in seen), seen_dirty).
     Caller must add keys to seen after each successful Discord post.
     """
@@ -69,7 +69,7 @@ async def poll_trades_for_new_messages(
     try:
         player_scores_json = await mfl.fetch_player_scores_current_year()
     except Exception:
-        # Keep trade polling alive even when playerScores export is unavailable.
+        # Keep polling alive when scores export is unavailable.
         player_scores_json = {}
     salaries_by_franchise = player_salaries_by_franchise(rosters_json)
     contract_years_by_franchise = player_contract_years_by_franchise(rosters_json)

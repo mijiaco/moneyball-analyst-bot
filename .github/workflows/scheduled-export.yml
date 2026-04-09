@@ -1,18 +1,15 @@
-name: MFL trade poll
+name: scheduled-export
 
 on:
   schedule:
-    # Every minute (fastest reliable GitHub schedule; runner may start a bit after :00).
     - cron: "* * * * *"
   workflow_dispatch:
 
 permissions:
   contents: write
 
-# One poll at a time so seen_trades.json and Discord posts stay consistent.
-# Do not cancel an in-flight run when another is scheduled — that was delaying or dropping posts.
 concurrency:
-  group: mfl-trade-poll
+  group: scheduled-export
   cancel-in-progress: false
 
 jobs:
@@ -22,6 +19,11 @@ jobs:
       DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
       DISCORD_CHANNEL_ID: ${{ secrets.DISCORD_CHANNEL_ID }}
       MFL_API_KEY: ${{ secrets.MFL_API_KEY }}
+      MFL_USER_AGENT: ${{ secrets.MFL_USER_AGENT }}
+      MFL_HOST: ${{ vars.MFL_HOST }}
+      MFL_YEAR: ${{ vars.MFL_YEAR }}
+      MFL_LEAGUE_ID: ${{ vars.MFL_LEAGUE_ID }}
+      MFL_ANNOUNCE_MAX_AGE_HOURS: ${{ vars.MFL_ANNOUNCE_MAX_AGE_HOURS }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -37,6 +39,16 @@ jobs:
             fi
           done
 
+      - name: Require repository variables
+        run: |
+          set -e
+          for var in MFL_HOST MFL_YEAR MFL_LEAGUE_ID; do
+            if [ -z "${!var}" ]; then
+              echo "::error::Missing Actions variable '$var'. Repo → Settings → Secrets and variables → Actions → Variables tab → New repository variable (same name)."
+              exit 1
+            fi
+          done
+
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
@@ -44,11 +56,10 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Poll and post trades
+      - name: Run scheduled job
         run: python -m src.run_once
 
-      # Avoid git push races (non-FF): update the file via REST with SHA + retries.
-      - name: Upload seen_trades.json (Contents API)
+      - name: Upload dedupe state (Contents API)
         uses: actions/github-script@v8
         with:
           github-token: ${{ github.token }}
@@ -79,7 +90,7 @@ jobs:
                 remoteSha = data.sha;
                 const remoteText = Buffer.from(data.content, "base64").toString("utf8");
                 if (remoteText === newContent) {
-                  console.log("seen_trades.json unchanged on disk vs remote; skip commit");
+                  console.log("dedupe state unchanged vs remote; skip commit");
                   return;
                 }
               } catch (e) {
@@ -93,12 +104,12 @@ jobs:
                   owner,
                   repo,
                   path: filePath,
-                  message: "chore: update seen trades dedupe state",
+                  message: "chore: sync dedupe state",
                   content: b64,
                   branch,
                   ...(remoteSha ? { sha: remoteSha } : {}),
                 });
-                console.log("Committed seen_trades.json via API");
+                console.log("Committed dedupe state via API");
                 return;
               } catch (e) {
                 const retry = (e.status === 409 || e.status === 422) && attempt < 10;

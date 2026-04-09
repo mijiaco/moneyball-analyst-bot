@@ -1,4 +1,4 @@
-"""Discord bot: poll MFL for processed trades and post to a channel."""
+"""Discord gateway client: periodic poll and channel posts."""
 
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ import httpx
 from dotenv import load_dotenv
 
 from src.mfl_client import MflClient, franchise_names_from_league
+from src.mfl_env import mfl_connect_env_help_suffix, mfl_connect_settings
 from src.trade_poll_core import poll_trades_for_new_messages
 from src.trade_notify import (
     current_season_lookback_days,
@@ -49,9 +50,13 @@ class TradeBot(discord.Client):
         # Default 60s if unset; override with MFL_POLL_INTERVAL_SECONDS (e.g. 30).
         self._poll_interval = int(os.environ.get("MFL_POLL_INTERVAL_SECONDS", "60"))
         self._lookback_days = int(os.environ.get("MFL_TRADE_LOOKBACK_DAYS", "14"))
-        self._host = os.environ.get("MFL_HOST", "www45.myfantasyleague.com")
-        self._year = os.environ.get("MFL_YEAR", "2026")
-        self._league_id = os.environ.get("MFL_LEAGUE_ID", "40468")
+        connect = mfl_connect_settings()
+        if connect is None:
+            raise RuntimeError(
+                "MFL_HOST, MFL_YEAR, and MFL_LEAGUE_ID must be set. "
+                + mfl_connect_env_help_suffix()
+            )
+        self._host, self._year, self._league_id = connect
         self._api_key = os.environ.get("MFL_API_KEY") or None
         self._user_agent = os.environ.get("MFL_USER_AGENT") or None
         self._season_year = int(self._year)
@@ -190,13 +195,13 @@ class TradeBot(discord.Client):
             )
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 429:
-                logger.warning("MFL 429; backing off 120s")
+                logger.warning("Upstream 429; backing off 120s")
                 await asyncio.sleep(120.0)
             else:
-                logger.exception("MFL HTTP error: %s", exc)
+                logger.exception("Upstream HTTP error: %s", exc)
             return
         except Exception:
-            logger.exception("MFL fetch failed")
+            logger.exception("Upstream fetch failed")
             return
 
         for key, payload in pending_posts:
