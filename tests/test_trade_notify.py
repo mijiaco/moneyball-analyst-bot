@@ -21,12 +21,14 @@ from src.trade_notify import (
     load_seen,
     save_seen,
     random_trade_commentary,
+    format_top_traders_text,
     trade_bait_notification_key,
     trade_dedupe_resolved,
     trade_fingerprint,
     trade_fingerprint_legacy,
     trade_notification_key,
     trade_notification_key_variants,
+    top_trader_counts,
 )
 
 
@@ -447,3 +449,45 @@ def test_player_points_by_id_reads_player_scores_rows() -> None:
     assert points["16257"] == 213.2
     assert points["17000"] == 367.4
     assert points["17001"] == 12.0
+
+
+def test_top_trader_counts_counts_both_sides_and_dedupes() -> None:
+    transactions = [
+        {
+            "type": "TRADE",
+            "timestamp": "1",
+            "franchise": "0001",
+            "franchise2": "0002",
+            "franchise1_gave_up": "A,",
+            "franchise2_gave_up": "B,",
+        },
+        {
+            "type": "TRADE",
+            "timestamp": "1",
+            "franchise": "0001",
+            "franchise2": "0002",
+            "franchise1_gave_up": "A,",
+            "franchise2_gave_up": "B,",
+        },
+        {
+            "type": "TRADE",
+            "timestamp": "2",
+            "franchise": "0001",
+            "franchise2": "0003",
+            "franchise1_gave_up": "C,",
+            "franchise2_gave_up": "D,",
+        },
+    ]
+    counts = top_trader_counts(transactions, dedupe_by_trade=True)
+    assert counts["0001"] == 2
+    assert counts["0002"] == 1
+    assert counts["0003"] == 1
+
+
+def test_format_top_traders_text_renders_expected_lines() -> None:
+    counts = {"0002": 12, "0001": 15}
+    franchise_names = {"0001": "The Purple Curtain", "0002": "Joker"}
+    text = format_top_traders_text(counts, franchise_names, top_n=2)
+    assert "Top Traders" in text
+    assert "1. The Purple Curtain - 15 Trades" in text
+    assert "2. Joker - 12 Trades" in text

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from collections import Counter
+from datetime import datetime, timezone
 import json
 import os
 import random
@@ -618,7 +620,89 @@ def env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
-async def dry_run(apply_dedupe: bool, *, last_trade_only: bool = False) -> int:
+def top_trader_counts(
+    transactions: list[dict[str, Any]],
+    *,
+    dedupe_by_trade: bool = True,
+) -> Counter[str]:
+    """
+    Count trades per franchise id.
+    Each TRADE increments both participating franchises by one.
+    """
+    counts: Counter[str] = Counter()
+    seen_trade_fingerprints: set[str] = set()
+    for tx in transactions:
+        if tx.get("type") != "TRADE":
+            continue
+        if dedupe_by_trade:
+            fingerprint = trade_fingerprint(tx)
+            if fingerprint in seen_trade_fingerprints:
+                continue
+            seen_trade_fingerprints.add(fingerprint)
+        franchise_1 = str(tx.get("franchise", "")).strip()
+        franchise_2 = str(tx.get("franchise2", "")).strip()
+        if franchise_1:
+            counts[franchise_1] += 1
+        if franchise_2:
+            counts[franchise_2] += 1
+    return counts
+
+
+def format_top_traders_text(
+    counts: Counter[str],
+    franchise_names: dict[str, str],
+    *,
+    title: str = "Top Traders This Year",
+    week_of_label: str | None = None,
+    disclaimer: str | None = None,
+    top_n: int = 10,
+) -> str:
+    if top_n <= 0:
+        top_n = len(counts)
+    ranked = sorted(
+        counts.items(),
+        key=lambda item: (-item[1], franchise_names.get(item[0], f"Franchise {item[0]}").casefold()),
+    )
+    if not ranked:
+        lines = [title]
+        if week_of_label:
+            lines.append(f"Week of {week_of_label}")
+        if disclaimer:
+            lines.append(disclaimer)
+        lines.extend(["", "No trades found in the selected window."])
+        return "\n".join(lines)
+    lines = [title]
+    if week_of_label:
+        lines.append(f"Week of {week_of_label}")
+    if disclaimer:
+        lines.append(disclaimer)
+    lines.append("")
+    for index, (franchise_id, trade_count) in enumerate(ranked[:top_n], start=1):
+        team_name = franchise_names.get(franchise_id, f"Franchise {franchise_id}")
+        trade_label = "Trade" if trade_count == 1 else "Trades"
+        lines.append(f"{index}. {team_name} - {trade_count} {trade_label}")
+    return "\n".join(lines)
+
+
+def current_season_lookback_days(season_year: int) -> int:
+    """
+    Return DAYS window that covers Jan 1 through now for the provided season year.
+    """
+    now_utc = datetime.now(timezone.utc)
+    season_start = datetime(season_year, 1, 1, tzinfo=timezone.utc)
+    if now_utc <= season_start:
+        return 1
+    delta_days = (now_utc - season_start).days + 1
+    return max(1, delta_days)
+
+
+async def dry_run(
+    apply_dedupe: bool,
+    *,
+    last_trade_only: bool = False,
+    top_traders_only: bool = False,
+    top_traders_limit: int = 10,
+) -> int:
     load_dotenv()
     host = os.environ.get("MFL_HOST", "www45.myfantasyleague.com")
     year = os.environ.get("MFL_YEAR", "2026")
@@ -633,6 +717,7 @@ async def dry_run(apply_dedupe: bool, *, last_trade_only: bool = False) -> int:
     data_dir = Path(__file__).resolve().parent.parent / "data"
     seen_path = data_dir / "seen_trades.json"
     players_cache = data_dir / "players_cache.json"
+    current_year_lookback = current_season_lookback_days(season_year)
 
     seen: set[str] = load_seen(seen_path) if apply_dedupe else set()
 
@@ -645,7 +730,8 @@ async def dry_run(apply_dedupe: bool, *, last_trade_only: bool = False) -> int:
         players_cache_path=players_cache,
     )
     try:
-        transactions = await client.fetch_transactions_trade_days(lookback)
+        transactions_lookback = current_year_lookback if top_traders_only else lookback
+        transactions = await client.fetch_transactions_trade_days(transactions_lookback)
         await client.sleep_between_exports()
         league_json = await client.fetch_league()
         await client.sleep_between_exports()
@@ -662,6 +748,28 @@ async def dry_run(apply_dedupe: bool, *, last_trade_only: bool = False) -> int:
     contract_years = player_contract_years_by_franchise(rosters_json)
     points_by_player_id = player_points_by_id(scores_json)
     now = time.time()
+
+    if top_traders_only:
+        counts = top_trader_counts(transactions, dedupe_by_trade=True)
+        print(
+            format_top_traders_text(
+                counts,
+                franchise_names,
+                title="Top Traders This Year",
+                disclaimer=(
+                    "Disclaimer: this includes some test trades from early in the year."
+                ),
+                top_n=top_traders_limit,
+            )
+        )
+        print(
+            (
+                "(dry-run: top traders based on current year lookback: "
+                f"{current_year_lookback} day window)"
+            ),
+            file=sys.stderr,
+        )
+        return 0
 
     if last_trade_only:
         trades_only = [tx for tx in transactions if tx.get("type") == "TRADE"]
@@ -754,15 +862,32 @@ def main() -> None:
         action="store_true",
         help="With --dry-run, print only the newest TRADE in the lookback (format/API check).",
     )
+    parser.add_argument(
+        "--top-traders",
+        action="store_true",
+        help="With --dry-run, print top franchises by trade count in the lookback window.",
+    )
+    parser.add_argument(
+        "--top-limit",
+        type=int,
+        default=0,
+        help="With --top-traders, number of ranked teams to print (0 = full list).",
+    )
     args = parser.parse_args()
     if args.dry_run:
         if args.last_trade and args.with_dedupe:
             parser.error("--last-trade cannot be used with --with-dedupe")
+        if args.last_trade and args.top_traders:
+            parser.error("--last-trade cannot be used with --top-traders")
+        if args.with_dedupe and args.top_traders:
+            parser.error("--with-dedupe cannot be used with --top-traders")
         raise SystemExit(
             asyncio.run(
                 dry_run(
                     apply_dedupe=args.with_dedupe,
                     last_trade_only=args.last_trade,
+                    top_traders_only=args.top_traders,
+                    top_traders_limit=args.top_limit,
                 )
             )
         )
