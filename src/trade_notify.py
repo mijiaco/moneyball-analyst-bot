@@ -797,6 +797,81 @@ def format_cap_space_report_text(
     return "\n".join(lines)
 
 
+def roster_slot_counts_by_franchise(
+    rosters_json: dict[str, Any],
+) -> dict[str, dict[str, int]]:
+    """
+    franchise id -> {active, taxi, ir} player counts based on roster player status values.
+    """
+    rosters_block = rosters_json.get("rosters") or {}
+    franchise_rows_raw = rosters_block.get("franchise")
+    if isinstance(franchise_rows_raw, list):
+        franchise_rows = [row for row in franchise_rows_raw if isinstance(row, dict)]
+    elif isinstance(franchise_rows_raw, dict):
+        franchise_rows = [franchise_rows_raw]
+    else:
+        franchise_rows = []
+
+    out: dict[str, dict[str, int]] = {}
+    for franchise_row in franchise_rows:
+        franchise_id = franchise_row.get("id")
+        if franchise_id is None:
+            continue
+        franchise_id_str = str(franchise_id)
+        players_raw = franchise_row.get("player") or []
+        if isinstance(players_raw, list):
+            players = [player for player in players_raw if isinstance(player, dict)]
+        elif isinstance(players_raw, dict):
+            players = [players_raw]
+        else:
+            players = []
+        active_count = 0
+        taxi_count = 0
+        ir_count = 0
+        for player in players:
+            status = str(player.get("status") or "").strip().upper()
+            if "IR" in status:
+                ir_count += 1
+            elif "TAXI" in status:
+                taxi_count += 1
+            else:
+                active_count += 1
+        out[franchise_id_str] = {
+            "active": active_count,
+            "taxi": taxi_count,
+            "ir": ir_count,
+        }
+    return out
+
+
+def format_roster_breakdown_report_text(
+    franchise_names: dict[str, str],
+    slot_counts_by_franchise: dict[str, dict[str, int]],
+    *,
+    title: str = "Players by Team (Active / Taxi / IR)",
+) -> str:
+    team_ids = set(franchise_names.keys()) | set(slot_counts_by_franchise.keys())
+    sorted_team_ids = sorted(
+        team_ids,
+        key=lambda team_id: franchise_names.get(team_id, f"Franchise {team_id}").casefold(),
+    )
+    if not sorted_team_ids:
+        return f"{title}\n\nNo roster data found."
+    lines = [title, ""]
+    for team_id in sorted_team_ids:
+        team_name = franchise_names.get(team_id, f"Franchise {team_id}")
+        counts = slot_counts_by_franchise.get(team_id, {})
+        active_count = int(counts.get("active", 0))
+        taxi_count = int(counts.get("taxi", 0))
+        ir_count = int(counts.get("ir", 0))
+        lines.append(team_name)
+        lines.append(f"* Active Roster: {active_count} Players")
+        lines.append(f"* Taxi Squad: {taxi_count} Players")
+        lines.append(f"* IR: {ir_count} Players")
+        lines.append("")
+    return "\n".join(lines).rstrip()
+
+
 async def dry_run(
     apply_dedupe: bool,
     *,
@@ -805,6 +880,7 @@ async def dry_run(
     top_traders_limit: int = 10,
     draft_picks_report_only: bool = False,
     cap_space_report_only: bool = False,
+    roster_breakdown_report_only: bool = False,
 ) -> int:
     load_dotenv()
     connect = mfl_connect_settings()
@@ -904,6 +980,16 @@ async def dry_run(
             )
         )
         print("(dry-run: cap-space report generated from league export)", file=sys.stderr)
+        return 0
+
+    if roster_breakdown_report_only:
+        print(
+            format_roster_breakdown_report_text(
+                franchise_names,
+                roster_slot_counts_by_franchise(rosters_json),
+            )
+        )
+        print("(dry-run: roster breakdown report generated from rosters export)", file=sys.stderr)
         return 0
 
     if last_trade_only:
@@ -1020,6 +1106,11 @@ def main() -> None:
         action="store_true",
         help="With --dry-run, print cap space available by team.",
     )
+    parser.add_argument(
+        "--roster-breakdown-report",
+        action="store_true",
+        help="With --dry-run, print active/taxi/IR player counts by team.",
+    )
     args = parser.parse_args()
     if args.dry_run:
         if args.last_trade and args.with_dedupe:
@@ -1042,6 +1133,16 @@ def main() -> None:
             parser.error("--top-traders cannot be used with --cap-space-report")
         if args.draft_picks_report and args.cap_space_report:
             parser.error("--draft-picks-report cannot be used with --cap-space-report")
+        if args.last_trade and args.roster_breakdown_report:
+            parser.error("--last-trade cannot be used with --roster-breakdown-report")
+        if args.with_dedupe and args.roster_breakdown_report:
+            parser.error("--with-dedupe cannot be used with --roster-breakdown-report")
+        if args.top_traders and args.roster_breakdown_report:
+            parser.error("--top-traders cannot be used with --roster-breakdown-report")
+        if args.draft_picks_report and args.roster_breakdown_report:
+            parser.error("--draft-picks-report cannot be used with --roster-breakdown-report")
+        if args.cap_space_report and args.roster_breakdown_report:
+            parser.error("--cap-space-report cannot be used with --roster-breakdown-report")
         raise SystemExit(
             asyncio.run(
                 dry_run(
@@ -1051,6 +1152,7 @@ def main() -> None:
                     top_traders_limit=args.top_limit,
                     draft_picks_report_only=args.draft_picks_report,
                     cap_space_report_only=args.cap_space_report,
+                    roster_breakdown_report_only=args.roster_breakdown_report,
                 )
             )
         )

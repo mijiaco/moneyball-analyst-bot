@@ -15,6 +15,7 @@ from src.trade_notify import (
     format_draft_token,
     format_draft_picks_report_text,
     format_cap_space_report_text,
+    format_roster_breakdown_report_text,
     format_future_pick_token,
     format_trade_text,
     is_trade_bait_too_old_to_announce,
@@ -32,6 +33,7 @@ from src.trade_notify import (
     trade_notification_key_variants,
     top_trader_counts,
     cap_space_available_by_franchise,
+    roster_slot_counts_by_franchise,
 )
 
 
@@ -560,3 +562,34 @@ def test_format_cap_space_report_text_renders_ranked_lines() -> None:
     assert "Cap Space Available by Team" in text
     assert "1. Team B - $750 Available" in text
     assert "2. Team A - $500 Available" in text
+
+
+def test_roster_slot_counts_by_franchise_splits_active_taxi_ir() -> None:
+    rosters_json = {
+        "rosters": {
+            "franchise": {
+                "id": "0001",
+                "player": [
+                    {"id": "1", "status": "ROSTER"},
+                    {"id": "2", "status": "TAXI_SQUAD"},
+                    {"id": "3", "status": "IR"},
+                    {"id": "4", "status": ""},
+                ],
+            }
+        }
+    }
+    counts = roster_slot_counts_by_franchise(rosters_json)
+    assert counts["0001"]["active"] == 2
+    assert counts["0001"]["taxi"] == 1
+    assert counts["0001"]["ir"] == 1
+
+
+def test_format_roster_breakdown_report_text_renders_expected_lines() -> None:
+    franchise_names = {"0010": "Glass Joe's Revenge"}
+    slot_counts = {"0010": {"active": 23, "taxi": 0, "ir": 0}}
+    text = format_roster_breakdown_report_text(franchise_names, slot_counts)
+    assert "Players by Team (Active / Taxi / IR)" in text
+    assert "Glass Joe's Revenge" in text
+    assert "* Active Roster: 23 Players" in text
+    assert "* Taxi Squad: 0 Players" in text
+    assert "* IR: 0 Players" in text

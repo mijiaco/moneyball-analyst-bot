@@ -25,8 +25,10 @@ from src.trade_notify import (
     current_season_lookback_days,
     env_bool,
     format_draft_picks_report_text,
+    format_roster_breakdown_report_text,
     format_top_traders_text,
     load_seen,
+    roster_slot_counts_by_franchise,
     save_seen,
     top_trader_counts,
 )
@@ -99,8 +101,10 @@ def _current_week_key_et(now_et: datetime) -> str:
 
 
 def _is_weekly_reports_due(now_et: datetime) -> bool:
-    # Saturday at/after 3:00 PM Eastern Time
-    return now_et.weekday() == 5 and now_et.hour >= 15
+    # Saturday at/after 3:30 PM Eastern Time
+    return now_et.weekday() == 5 and (
+        now_et.hour > 15 or (now_et.hour == 15 and now_et.minute >= 30)
+    )
 
 
 def _as_of_label_et(now_et: datetime) -> str:
@@ -167,6 +171,9 @@ async def _async_main() -> int:
     weekly_reports_enabled = env_bool("MFL_WEEKLY_REPORTS_ENABLED", True)
     weekly_reports_include_draft_picks = env_bool(
         "MFL_WEEKLY_REPORTS_INCLUDE_DRAFT_PICKS", True
+    )
+    weekly_reports_include_roster_breakdown = env_bool(
+        "MFL_WEEKLY_REPORTS_INCLUDE_ROSTER_BREAKDOWN", True
     )
 
     connect = mfl_connect_settings()
@@ -256,6 +263,29 @@ async def _async_main() -> int:
                             weekly_report_payloads.append(
                                 (chunk_title, chunk_with_as_of, 5793266)
                             )
+
+                    if weekly_reports_include_roster_breakdown:
+                        await mfl.sleep_between_exports()
+                        rosters_json = await mfl.fetch_rosters()
+                        roster_report = format_roster_breakdown_report_text(
+                            franchise_names,
+                            roster_slot_counts_by_franchise(rosters_json),
+                        )
+                        roster_description = (
+                            f"{as_of_line}\n\n"
+                            + (
+                                roster_report.split("\n\n", 1)[1]
+                                if "\n\n" in roster_report
+                                else roster_report
+                            )
+                        )
+                        weekly_report_payloads.append(
+                            (
+                                "Players by Team (Active / Taxi / IR)",
+                                roster_description,
+                                3447003,
+                            )
+                        )
 
                     for report_title, report_description, report_color in weekly_report_payloads:
                         pending_posts.append(
