@@ -99,7 +99,12 @@ def _current_week_key_et(now_et: datetime) -> str:
 
 
 def _is_weekly_reports_due(now_et: datetime) -> bool:
-    return now_et.weekday() == 4 and now_et.hour >= 17
+    # Saturday at/after 3:00 PM Eastern Time
+    return now_et.weekday() == 5 and now_et.hour >= 15
+
+
+def _as_of_label_et(now_et: datetime) -> str:
+    return now_et.strftime("%Y-%m-%d %I:%M %p ET")
 
 
 def _chunk_text_by_sections(text: str, max_len: int = 3900) -> list[str]:
@@ -199,6 +204,7 @@ async def _async_main() -> int:
         weekly_report_payloads: list[tuple[str, str, int]] = []
         if weekly_reports_enabled:
             now_et = datetime.now(ZoneInfo("America/New_York"))
+            as_of_line = f"As of {_as_of_label_et(now_et)}"
             if _is_weekly_reports_due(now_et):
                 current_week_key = _current_week_key_et(now_et)
                 last_week_key = _load_last_weekly_reports_week_key(reports_state_path)
@@ -223,6 +229,7 @@ async def _async_main() -> int:
                         if "\n\n" in top_traders_text
                         else top_traders_text
                     )
+                    top_description = f"{as_of_line}\n\n{top_description}"
                     weekly_report_payloads.append(
                         ("Top Traders This Year", top_description, 15844367)
                     )
@@ -245,7 +252,10 @@ async def _async_main() -> int:
                                     "Draft Picks Report (Current + Future) "
                                     f"({index}/{total_chunks})"
                                 )
-                            weekly_report_payloads.append((chunk_title, chunk, 5793266))
+                            chunk_with_as_of = f"{as_of_line}\n\n{chunk}"
+                            weekly_report_payloads.append(
+                                (chunk_title, chunk_with_as_of, 5793266)
+                            )
 
                     for report_title, report_description, report_color in weekly_report_payloads:
                         pending_posts.append(

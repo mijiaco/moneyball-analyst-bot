@@ -14,6 +14,7 @@ from src.trade_notify import (
     format_trade_bait_text,
     format_draft_token,
     format_draft_picks_report_text,
+    format_cap_space_report_text,
     format_future_pick_token,
     format_trade_text,
     is_trade_bait_too_old_to_announce,
@@ -30,6 +31,7 @@ from src.trade_notify import (
     trade_notification_key,
     trade_notification_key_variants,
     top_trader_counts,
+    cap_space_available_by_franchise,
 )
 
 
@@ -531,3 +533,30 @@ def test_format_draft_picks_report_text_renders_sections() -> None:
     assert "* Round 1.01" in text
     assert "Future Picks:" in text
     assert "* Year 2027 Round 2 from Team B" in text
+
+
+def test_cap_space_available_by_franchise_parses_salary_cap_amount() -> None:
+    league_json = {
+        "league": {
+            "franchises": {
+                "franchise": [
+                    {"id": "0001", "bbidAvailableBalance": "123.00", "salaryCapAmount": "999"},
+                    {"id": "0002", "bbidAvailableBalance": "45.5", "salaryCapAmount": "888"},
+                    {"id": "0003", "salaryCapAmount": "77"},
+                ]
+            }
+        }
+    }
+    out = cap_space_available_by_franchise(league_json)
+    assert out["0001"] == 123.0
+    assert out["0002"] == 45.5
+    assert out["0003"] == 77.0
+
+
+def test_format_cap_space_report_text_renders_ranked_lines() -> None:
+    franchise_names = {"0001": "Team A", "0002": "Team B"}
+    cap_space = {"0001": 500.0, "0002": 750.0}
+    text = format_cap_space_report_text(franchise_names, cap_space)
+    assert "Cap Space Available by Team" in text
+    assert "1. Team B - $750 Available" in text
+    assert "2. Team A - $500 Available" in text

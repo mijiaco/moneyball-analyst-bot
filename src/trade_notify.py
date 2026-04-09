@@ -741,6 +741,62 @@ def format_draft_picks_report_text(
     return "\n".join(lines).rstrip()
 
 
+def cap_space_available_by_franchise(league_json: dict[str, Any]) -> dict[str, float]:
+    """
+    franchise id -> currently available cap room from league.franchises[*].bbidAvailableBalance.
+    """
+    league_block = league_json.get("league") or league_json
+    franchises_block = league_block.get("franchises") or {}
+    franchise_rows_raw = franchises_block.get("franchise")
+    franchise_rows: list[dict[str, Any]]
+    if isinstance(franchise_rows_raw, list):
+        franchise_rows = [row for row in franchise_rows_raw if isinstance(row, dict)]
+    elif isinstance(franchise_rows_raw, dict):
+        franchise_rows = [franchise_rows_raw]
+    else:
+        franchise_rows = []
+
+    out: dict[str, float] = {}
+    for row in franchise_rows:
+        franchise_id = row.get("id")
+        if franchise_id is None:
+            continue
+        raw_amount = row.get("bbidAvailableBalance")
+        if raw_amount is None or str(raw_amount).strip() == "":
+            # Fallback for leagues that do not expose a dedicated available-balance field.
+            raw_amount = row.get("salaryCapAmount")
+        if raw_amount is None or str(raw_amount).strip() == "":
+            continue
+        raw_text = str(raw_amount).replace(",", "").strip()
+        try:
+            out[str(franchise_id)] = float(raw_text)
+        except ValueError:
+            continue
+    return out
+
+
+def format_cap_space_report_text(
+    franchise_names: dict[str, str],
+    cap_space_by_franchise: dict[str, float],
+    *,
+    title: str = "Cap Space Available by Team",
+) -> str:
+    ranked = sorted(
+        cap_space_by_franchise.items(),
+        key=lambda item: (
+            -item[1],
+            franchise_names.get(item[0], f"Franchise {item[0]}").casefold(),
+        ),
+    )
+    if not ranked:
+        return f"{title}\n\nNo cap-space data found."
+    lines = [title, ""]
+    for index, (franchise_id, cap_space) in enumerate(ranked, start=1):
+        team_name = franchise_names.get(franchise_id, f"Franchise {franchise_id}")
+        lines.append(f"{index}. {team_name} - ${round(cap_space):,} Available")
+    return "\n".join(lines)
+
+
 async def dry_run(
     apply_dedupe: bool,
     *,
@@ -748,6 +804,7 @@ async def dry_run(
     top_traders_only: bool = False,
     top_traders_limit: int = 10,
     draft_picks_report_only: bool = False,
+    cap_space_report_only: bool = False,
 ) -> int:
     load_dotenv()
     connect = mfl_connect_settings()
@@ -837,6 +894,16 @@ async def dry_run(
             )
         )
         print("(dry-run: draft picks report generated from assets export)", file=sys.stderr)
+        return 0
+
+    if cap_space_report_only:
+        print(
+            format_cap_space_report_text(
+                franchise_names,
+                cap_space_available_by_franchise(league_json),
+            )
+        )
+        print("(dry-run: cap-space report generated from league export)", file=sys.stderr)
         return 0
 
     if last_trade_only:
@@ -948,6 +1015,11 @@ def main() -> None:
         action="store_true",
         help="With --dry-run, print each franchise's current and future draft picks.",
     )
+    parser.add_argument(
+        "--cap-space-report",
+        action="store_true",
+        help="With --dry-run, print cap space available by team.",
+    )
     args = parser.parse_args()
     if args.dry_run:
         if args.last_trade and args.with_dedupe:
@@ -962,6 +1034,14 @@ def main() -> None:
             parser.error("--with-dedupe cannot be used with --draft-picks-report")
         if args.top_traders and args.draft_picks_report:
             parser.error("--top-traders cannot be used with --draft-picks-report")
+        if args.last_trade and args.cap_space_report:
+            parser.error("--last-trade cannot be used with --cap-space-report")
+        if args.with_dedupe and args.cap_space_report:
+            parser.error("--with-dedupe cannot be used with --cap-space-report")
+        if args.top_traders and args.cap_space_report:
+            parser.error("--top-traders cannot be used with --cap-space-report")
+        if args.draft_picks_report and args.cap_space_report:
+            parser.error("--draft-picks-report cannot be used with --cap-space-report")
         raise SystemExit(
             asyncio.run(
                 dry_run(
@@ -970,6 +1050,7 @@ def main() -> None:
                     top_traders_only=args.top_traders,
                     top_traders_limit=args.top_limit,
                     draft_picks_report_only=args.draft_picks_report,
+                    cap_space_report_only=args.cap_space_report,
                 )
             )
         )
