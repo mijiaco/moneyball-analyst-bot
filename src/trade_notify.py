@@ -14,11 +14,16 @@ import sys
 import time
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
+import certifi
+import httpx
 from dotenv import load_dotenv
 
+from src.discord_env import discord_target_channel_id
 from src.mfl_client import (
     MflClient,
+    accounting_balance_by_franchise,
     draft_picks_by_franchise,
     franchise_names_from_league,
     player_points_by_id,
@@ -702,12 +707,88 @@ def current_season_lookback_days(season_year: int) -> int:
     return max(1, delta_days)
 
 
+_CURRENT_YEAR_DRAFT_PICK = re.compile(
+    r"^\s*Year\s+(?P<year>\d{4})\s+Draft\s+Pick\s+(?P<slot>[\d.]+)\s*$",
+    re.IGNORECASE,
+)
+_ROUND_SLOT = re.compile(r"^\s*Round\s+(?P<slot>[\d.]+)\s*$", re.IGNORECASE)
+_FUTURE_YEAR_ROUND_FROM = re.compile(
+    r"^\s*Year\s+(?P<year>\d{4})\s+Round\s+(?P<round>\d+)\s+(?:Draft\s+Pick\s+)?from\s+(?P<from>.+?)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _format_compact_current_picks(
+    current_lines: list[str],
+    *,
+    report_season_year: int | None,
+) -> list[str]:
+    if not current_lines:
+        return ["* Current picks: None"]
+    by_year: dict[str, list[str]] = {}
+    round_only_slots: list[str] = []
+    unmatched: list[str] = []
+    for raw in current_lines:
+        line = raw.strip()
+        m_year = _CURRENT_YEAR_DRAFT_PICK.match(line)
+        if m_year:
+            y, slot = m_year.group("year"), m_year.group("slot")
+            by_year.setdefault(y, []).append(slot)
+            continue
+        m_round = _ROUND_SLOT.match(line)
+        if m_round and report_season_year is not None:
+            by_year.setdefault(str(report_season_year), []).append(m_round.group("slot"))
+            continue
+        if m_round:
+            round_only_slots.append(m_round.group("slot"))
+            continue
+        unmatched.append(line)
+    out: list[str] = []
+    for year in sorted(by_year.keys()):
+        slots = by_year[year]
+        out.append(f"* {year} Picks: {', '.join(slots)}")
+    if round_only_slots:
+        out.append(f"* Picks: {', '.join(round_only_slots)}")
+    for entry in unmatched:
+        out.append(f"* {entry}")
+    if not out:
+        return ["* Current picks: None"]
+    return out
+
+
+def _format_compact_future_picks(future_lines: list[str]) -> list[str]:
+    if not future_lines:
+        return ["* Future picks: None"]
+    by_year: dict[str, list[str]] = {}
+    unmatched: list[str] = []
+    for raw in future_lines:
+        line = raw.strip()
+        m = _FUTURE_YEAR_ROUND_FROM.match(line)
+        if m:
+            y = m.group("year")
+            r = m.group("round")
+            frm = m.group("from").strip()
+            by_year.setdefault(y, []).append(f"{r} ({frm})")
+            continue
+        unmatched.append(line)
+    out: list[str] = []
+    for year in sorted(by_year.keys()):
+        parts = by_year[year]
+        out.append(f"* {year} Picks: {', '.join(parts)}")
+    for entry in unmatched:
+        out.append(f"* Future: {entry}")
+    if not out:
+        return ["* Future picks: None"]
+    return out
+
+
 def format_draft_picks_report_text(
     franchise_names: dict[str, str],
     current_year_picks_by_franchise: dict[str, list[str]],
     future_year_picks_by_franchise: dict[str, list[str]],
     *,
     title: str = "Draft Picks Report (Current + Future)",
+    report_season_year: int | None = None,
 ) -> str:
     team_ids = set(franchise_names.keys())
     team_ids.update(current_year_picks_by_franchise.keys())
@@ -726,16 +807,13 @@ def format_draft_picks_report_text(
         current_lines = current_year_picks_by_franchise.get(franchise_id, [])
         future_lines = future_year_picks_by_franchise.get(franchise_id, [])
         lines.append(f"{team_name}")
-        lines.append("Current Year Picks:")
-        if current_lines:
-            lines.extend([f"* {entry}" for entry in current_lines])
-        else:
-            lines.append("* None")
-        lines.append("Future Picks:")
-        if future_lines:
-            lines.extend([f"* {entry}" for entry in future_lines])
-        else:
-            lines.append("* None")
+        lines.extend(
+            _format_compact_current_picks(
+                current_lines,
+                report_season_year=report_season_year,
+            )
+        )
+        lines.extend(_format_compact_future_picks(future_lines))
         lines.append("")
 
     return "\n".join(lines).rstrip()
@@ -848,7 +926,8 @@ def format_roster_breakdown_report_text(
     franchise_names: dict[str, str],
     slot_counts_by_franchise: dict[str, dict[str, int]],
     *,
-    title: str = "Players by Team (Active / Taxi / IR)",
+    title: str = "Players by Team (Active / Taxi / IR / $ Cap Remain)",
+    cap_available_by_franchise: dict[str, float] | None = None,
 ) -> str:
     team_ids = set(franchise_names.keys()) | set(slot_counts_by_franchise.keys())
     if not team_ids:
@@ -872,8 +951,110 @@ def format_roster_breakdown_report_text(
         ranking, start=1
     ):
         team_name = franchise_names.get(team_id, f"Franchise {team_id}")
-        lines.append(f"{index}) {team_name} - {active_count} / {taxi_count} / {ir_count}")
+        if cap_available_by_franchise is None:
+            lines.append(f"{index}) {team_name} - {active_count} / {taxi_count} / {ir_count}")
+            continue
+        cap_raw = cap_available_by_franchise.get(team_id)
+        if cap_raw is None:
+            cap_part = "—"
+        else:
+            cap_part = f"${int(round(cap_raw))}"
+        lines.append(
+            f"{index}) {team_name} - {active_count} / {taxi_count} / {ir_count} / {cap_part}"
+        )
     return "\n".join(lines).rstrip()
+
+
+def traded_own_future_pick_rounds_by_franchise(
+    league_json: dict[str, Any],
+    *,
+    target_year: int,
+    total_rounds: int,
+) -> dict[str, list[int]]:
+    """
+    franchise id -> sorted list of own pick rounds traded for target year.
+    Uses league.franchises[*].future_draft_picks (FP_<franchise_id>_<year>_<round>).
+    """
+    if total_rounds <= 0:
+        return {}
+    league_block = league_json.get("league") or league_json
+    franchises_block = league_block.get("franchises") or {}
+    franchise_rows_raw = franchises_block.get("franchise")
+    if isinstance(franchise_rows_raw, list):
+        franchise_rows = [row for row in franchise_rows_raw if isinstance(row, dict)]
+    elif isinstance(franchise_rows_raw, dict):
+        franchise_rows = [franchise_rows_raw]
+    else:
+        franchise_rows = []
+
+    expected_rounds = set(range(1, total_rounds + 1))
+    out: dict[str, list[int]] = {}
+    for row in franchise_rows:
+        franchise_id = row.get("id")
+        if franchise_id is None:
+            continue
+        franchise_id_text = str(franchise_id)
+        owned_own_rounds: set[int] = set()
+        raw_tokens = str(row.get("future_draft_picks") or "").strip()
+        if raw_tokens:
+            for token in raw_tokens.split(","):
+                token_text = token.strip()
+                if not token_text.startswith("FP_"):
+                    continue
+                parts = token_text[3:].split("_")
+                if len(parts) < 3:
+                    continue
+                token_franchise_id, token_year_text, token_round_text = (
+                    parts[0],
+                    parts[1],
+                    parts[2],
+                )
+                if token_franchise_id != franchise_id_text:
+                    continue
+                try:
+                    token_year = int(token_year_text)
+                    token_round = int(token_round_text)
+                except ValueError:
+                    continue
+                if token_year != target_year:
+                    continue
+                if token_round in expected_rounds:
+                    owned_own_rounds.add(token_round)
+        traded_rounds = sorted(expected_rounds - owned_own_rounds)
+        if traded_rounds:
+            out[franchise_id_text] = traded_rounds
+    return out
+
+
+def format_traded_future_picks_with_accounting_report_text(
+    franchise_names: dict[str, str],
+    traded_rounds_by_franchise: dict[str, list[int]],
+    accounting_balance_by_franchise: dict[str, float],
+    *,
+    target_year: int,
+) -> str:
+    title = f"Teams That Traded {target_year} Own Picks"
+    if not traded_rounds_by_franchise:
+        return f"{title}\n\nNo teams have traded their own {target_year} picks."
+    ordered_ids = sorted(
+        traded_rounds_by_franchise.keys(),
+        key=lambda franchise_id: franchise_names.get(
+            franchise_id, f"Franchise {franchise_id}"
+        ).casefold(),
+    )
+    lines = [
+        title,
+        "",
+        f"Team Name | {target_year} Own Picks Traded | Accounting Balance",
+        "--- | --- | ---",
+    ]
+    for franchise_id in ordered_ids:
+        team_name = franchise_names.get(franchise_id, f"Franchise {franchise_id}")
+        traded_rounds = traded_rounds_by_franchise.get(franchise_id, [])
+        rounds_text = ", ".join(str(round_number) for round_number in traded_rounds)
+        accounting_balance = accounting_balance_by_franchise.get(franchise_id, 0.0)
+        lines.append(f"{team_name} | {rounds_text} | ${accounting_balance:,.2f}")
+    return "\n".join(lines)
 
 
 async def dry_run(
@@ -885,8 +1066,10 @@ async def dry_run(
     draft_picks_report_only: bool = False,
     cap_space_report_only: bool = False,
     roster_breakdown_report_only: bool = False,
+    traded_2027_picks_report_only: bool = False,
 ) -> int:
-    load_dotenv()
+    _dotenv_path = Path(__file__).resolve().parent.parent / ".env"
+    load_dotenv(_dotenv_path, override=True)
     connect = mfl_connect_settings()
     if connect is None:
         miss = ", ".join(missing_mfl_connect_env_names())
@@ -920,6 +1103,32 @@ async def dry_run(
     )
     assets_json: dict[str, Any] = {}
     try:
+        if traded_2027_picks_report_only:
+            league_json = await client.fetch_league()
+            await client.sleep_between_exports()
+            accounting_json = await client.fetch_accounting()
+            franchise_names = franchise_names_from_league(league_json)
+            total_rounds = int(os.environ.get("MFL_DRAFT_ROUNDS", "6"))
+            traded_rounds = traded_own_future_pick_rounds_by_franchise(
+                league_json,
+                target_year=2027,
+                total_rounds=total_rounds,
+            )
+            accounting_totals = accounting_balance_by_franchise(accounting_json)
+            print(
+                format_traded_future_picks_with_accounting_report_text(
+                    franchise_names,
+                    traded_rounds,
+                    accounting_totals,
+                    target_year=2027,
+                )
+            )
+            print(
+                "(dry-run: traded 2027 own picks; balances from TYPE=accounting export)",
+                file=sys.stderr,
+            )
+            return 0
+
         transactions_lookback = current_year_lookback if top_traders_only else lookback
         transactions = await client.fetch_transactions_trade_days(transactions_lookback)
         await client.sleep_between_exports()
@@ -971,6 +1180,7 @@ async def dry_run(
                 franchise_names,
                 current_by_franchise,
                 future_by_franchise,
+                report_season_year=int(year),
             )
         )
         print("(dry-run: draft picks report generated from assets export)", file=sys.stderr)
@@ -991,6 +1201,7 @@ async def dry_run(
             format_roster_breakdown_report_text(
                 franchise_names,
                 roster_slot_counts_by_franchise(rosters_json),
+                cap_available_by_franchise=cap_space_available_by_franchise(league_json),
             )
         )
         print("(dry-run: roster breakdown report generated from rosters export)", file=sys.stderr)
@@ -1070,6 +1281,236 @@ async def dry_run(
     return 0
 
 
+DISCORD_API_V10 = "https://discord.com/api/v10"
+
+
+def _chunk_text_for_discord_embeds(text: str, max_len: int = 3900) -> list[str]:
+    """Split long report text on paragraph boundaries for Discord embed limits."""
+    sections = text.split("\n\n")
+    chunks: list[str] = []
+    current = ""
+    for section in sections:
+        candidate = section if not current else f"{current}\n\n{section}"
+        if len(candidate) <= max_len:
+            current = candidate
+            continue
+        if current:
+            chunks.append(current)
+        if len(section) <= max_len:
+            current = section
+            continue
+        lines = section.splitlines()
+        line_chunk = ""
+        for line in lines:
+            line_candidate = line if not line_chunk else f"{line_chunk}\n{line}"
+            if len(line_candidate) <= max_len:
+                line_chunk = line_candidate
+            else:
+                if line_chunk:
+                    chunks.append(line_chunk)
+                line_chunk = line
+        current = line_chunk
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+async def _discord_post_embed(
+    *,
+    token: str,
+    channel_id: str,
+    title: str,
+    description: str,
+    color: int,
+) -> bool:
+    headers = {
+        "Authorization": f"Bot {token}",
+        "User-Agent": "DiscordBot (https://github.com/discord/discord-api-docs, 1.0)",
+        "Content-Type": "application/json",
+    }
+    url = f"{DISCORD_API_V10}/channels/{channel_id}/messages"
+    body_json = {"embeds": [{"title": title, "description": description, "color": color}]}
+    async with httpx.AsyncClient(verify=certifi.where(), timeout=60.0, headers=headers) as dclient:
+        response = await dclient.post(url, json=body_json)
+        if response.status_code == 429:
+            try:
+                retry_after = float(response.json().get("retry_after", 2))
+            except (json.JSONDecodeError, TypeError, ValueError):
+                retry_after = 2.0
+            await asyncio.sleep(retry_after)
+            response = await dclient.post(url, json=body_json)
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError:
+            print(
+                f"Discord API error: {response.status_code} {response.text}",
+                file=sys.stderr,
+            )
+            return False
+    return True
+
+
+async def post_roster_breakdown_embed_to_discord() -> int:
+    """Post one roster + cap embed; channel from ``discord_target_channel_id()``."""
+    _dotenv_path = Path(__file__).resolve().parent.parent / ".env"
+    load_dotenv(_dotenv_path, override=True)
+    token = (os.environ.get("DISCORD_BOT_TOKEN") or "").strip()
+    channel_id = discord_target_channel_id()
+    if not token:
+        print("DISCORD_BOT_TOKEN is required.", file=sys.stderr)
+        return 1
+    if not channel_id:
+        print(
+            "Set TEST_DISCORD_CHANNEL_ID, DISCORD_CHANNEL_ID, or PROD_DISCORD_CHANNEL_ID.",
+            file=sys.stderr,
+        )
+        return 1
+
+    connect = mfl_connect_settings()
+    if connect is None:
+        miss = ", ".join(missing_mfl_connect_env_names())
+        print(
+            f"Missing required env: {miss}. {mfl_connect_env_help_suffix()}",
+            file=sys.stderr,
+        )
+        return 1
+
+    host, year, league_id = connect
+    api_key = os.environ.get("MFL_API_KEY") or None
+    user_agent = os.environ.get("MFL_USER_AGENT") or None
+    data_dir = Path(__file__).resolve().parent.parent / "data"
+    players_cache = data_dir / "players_cache.json"
+
+    client = MflClient(
+        host=host,
+        year=year,
+        league_id=league_id,
+        api_key=api_key,
+        user_agent=user_agent,
+        players_cache_path=players_cache,
+    )
+    try:
+        league_json = await client.fetch_league()
+        await client.sleep_between_exports()
+        rosters_json = await client.fetch_rosters()
+    finally:
+        await client.aclose()
+
+    franchise_names = franchise_names_from_league(league_json)
+    roster_report = format_roster_breakdown_report_text(
+        franchise_names,
+        roster_slot_counts_by_franchise(rosters_json),
+        cap_available_by_franchise=cap_space_available_by_franchise(league_json),
+    )
+    now_et = datetime.now(ZoneInfo("America/New_York"))
+    as_of_line = f"As of {now_et.strftime('%Y-%m-%d %I:%M %p ET')}"
+    body_text = roster_report.split("\n\n", 1)[1] if "\n\n" in roster_report else roster_report
+    description = f"{as_of_line}\n\n{body_text}"
+    if len(description) > 4096:
+        description = description[:4093] + "..."
+    embed_title = "Players by Team (Active / Taxi / IR / $ Cap Remain)"
+    color = 3447003
+    ok = await _discord_post_embed(
+        token=token,
+        channel_id=channel_id,
+        title=embed_title,
+        description=description,
+        color=color,
+    )
+    if not ok:
+        return 1
+
+    print("Posted roster breakdown embed to Discord.", file=sys.stderr)
+    return 0
+
+
+async def post_draft_picks_embeds_to_discord() -> int:
+    """Post draft picks report (chunked); channel from ``discord_target_channel_id()``."""
+    _dotenv_path = Path(__file__).resolve().parent.parent / ".env"
+    load_dotenv(_dotenv_path, override=True)
+    token = (os.environ.get("DISCORD_BOT_TOKEN") or "").strip()
+    channel_id = discord_target_channel_id()
+    if not token:
+        print("DISCORD_BOT_TOKEN is required.", file=sys.stderr)
+        return 1
+    if not channel_id:
+        print(
+            "Set TEST_DISCORD_CHANNEL_ID, DISCORD_CHANNEL_ID, or PROD_DISCORD_CHANNEL_ID.",
+            file=sys.stderr,
+        )
+        return 1
+
+    connect = mfl_connect_settings()
+    if connect is None:
+        miss = ", ".join(missing_mfl_connect_env_names())
+        print(
+            f"Missing required env: {miss}. {mfl_connect_env_help_suffix()}",
+            file=sys.stderr,
+        )
+        return 1
+
+    host, year, league_id = connect
+    season_year = int(year)
+    api_key = os.environ.get("MFL_API_KEY") or None
+    user_agent = os.environ.get("MFL_USER_AGENT") or None
+    data_dir = Path(__file__).resolve().parent.parent / "data"
+    players_cache = data_dir / "players_cache.json"
+
+    client = MflClient(
+        host=host,
+        year=year,
+        league_id=league_id,
+        api_key=api_key,
+        user_agent=user_agent,
+        players_cache_path=players_cache,
+    )
+    try:
+        league_json = await client.fetch_league()
+        await client.sleep_between_exports()
+        assets_json = await client.fetch_assets()
+    finally:
+        await client.aclose()
+
+    franchise_names = franchise_names_from_league(league_json)
+    current_map, future_map = draft_picks_by_franchise(assets_json)
+    draft_report = format_draft_picks_report_text(
+        franchise_names,
+        current_map,
+        future_map,
+        report_season_year=season_year,
+    )
+    now_et = datetime.now(ZoneInfo("America/New_York"))
+    as_of_line = f"As of {now_et.strftime('%Y-%m-%d %I:%M %p ET')}"
+    body_text = draft_report.split("\n\n", 1)[1] if "\n\n" in draft_report else draft_report
+    chunks = _chunk_text_for_discord_embeds(body_text, max_len=3900)
+    total = len(chunks)
+    color = 5793266
+    for index, chunk in enumerate(chunks, start=1):
+        title = "Draft Picks Report (Current + Future)"
+        if total > 1:
+            title = f"Draft Picks Report (Current + Future) ({index}/{total})"
+        description = f"{as_of_line}\n\n{chunk}"
+        if len(description) > 4096:
+            description = description[:4093] + "..."
+        ok = await _discord_post_embed(
+            token=token,
+            channel_id=channel_id,
+            title=title,
+            description=description,
+            color=color,
+        )
+        if not ok:
+            return 1
+        if index < total:
+            await asyncio.sleep(0.6)
+
+    print(
+        f"Posted draft picks report to Discord ({total} embed(s)).",
+        file=sys.stderr,
+    )
+    return 0
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Fetch league trades and print formatted output.",
@@ -1115,7 +1556,58 @@ def main() -> None:
         action="store_true",
         help="With --dry-run, print active/taxi/IR player counts by team.",
     )
+    parser.add_argument(
+        "--traded-2027-picks-report",
+        action="store_true",
+        help="With --dry-run, print teams that traded own 2027 picks with accounting balance.",
+    )
+    parser.add_argument(
+        "--post-roster-breakdown-discord",
+        action="store_true",
+        help=(
+            "Post one roster + cap embed to Discord (channel from TEST_DISCORD_CHANNEL_ID "
+            "or DISCORD_CHANNEL_ID / PROD_DISCORD_CHANNEL_ID; uses .env)."
+        ),
+    )
+    parser.add_argument(
+        "--post-draft-picks-discord",
+        action="store_true",
+        help=(
+            "Post draft picks report embed(s) to Discord (same channel resolution as "
+            "--post-roster-breakdown-discord)."
+        ),
+    )
     args = parser.parse_args()
+
+    mode_flags = (
+        args.dry_run,
+        args.with_dedupe,
+        args.last_trade,
+        args.top_traders,
+        args.draft_picks_report,
+        args.cap_space_report,
+        args.roster_breakdown_report,
+        args.traded_2027_picks_report,
+    )
+    if args.post_roster_breakdown_discord and args.post_draft_picks_discord:
+        parser.error(
+            "use only one of --post-roster-breakdown-discord or --post-draft-picks-discord"
+        )
+    if args.post_roster_breakdown_discord:
+        if any(mode_flags):
+            parser.error(
+                "--post-roster-breakdown-discord cannot be combined with --dry-run "
+                "or other report flags"
+            )
+        raise SystemExit(asyncio.run(post_roster_breakdown_embed_to_discord()))
+    if args.post_draft_picks_discord:
+        if any(mode_flags):
+            parser.error(
+                "--post-draft-picks-discord cannot be combined with --dry-run "
+                "or other report flags"
+            )
+        raise SystemExit(asyncio.run(post_draft_picks_embeds_to_discord()))
+
     if args.dry_run:
         if args.last_trade and args.with_dedupe:
             parser.error("--last-trade cannot be used with --with-dedupe")
@@ -1147,6 +1639,18 @@ def main() -> None:
             parser.error("--draft-picks-report cannot be used with --roster-breakdown-report")
         if args.cap_space_report and args.roster_breakdown_report:
             parser.error("--cap-space-report cannot be used with --roster-breakdown-report")
+        if args.last_trade and args.traded_2027_picks_report:
+            parser.error("--last-trade cannot be used with --traded-2027-picks-report")
+        if args.with_dedupe and args.traded_2027_picks_report:
+            parser.error("--with-dedupe cannot be used with --traded-2027-picks-report")
+        if args.top_traders and args.traded_2027_picks_report:
+            parser.error("--top-traders cannot be used with --traded-2027-picks-report")
+        if args.draft_picks_report and args.traded_2027_picks_report:
+            parser.error("--draft-picks-report cannot be used with --traded-2027-picks-report")
+        if args.cap_space_report and args.traded_2027_picks_report:
+            parser.error("--cap-space-report cannot be used with --traded-2027-picks-report")
+        if args.roster_breakdown_report and args.traded_2027_picks_report:
+            parser.error("--roster-breakdown-report cannot be used with --traded-2027-picks-report")
         raise SystemExit(
             asyncio.run(
                 dry_run(
@@ -1157,6 +1661,7 @@ def main() -> None:
                     draft_picks_report_only=args.draft_picks_report,
                     cap_space_report_only=args.cap_space_report,
                     roster_breakdown_report_only=args.roster_breakdown_report,
+                    traded_2027_picks_report_only=args.traded_2027_picks_report,
                 )
             )
         )

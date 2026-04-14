@@ -106,6 +106,11 @@ class MflClient:
         data = await self._get_json({"TYPE": "assets"})
         return data if isinstance(data, dict) else {}
 
+    async def fetch_accounting(self) -> dict[str, Any]:
+        """League accounting ledger (same source as the site accounting report)."""
+        data = await self._get_json({"TYPE": "accounting"})
+        return data if isinstance(data, dict) else {}
+
     async def fetch_player_scores_current_year(self) -> dict[str, Any]:
         """
         Fetch player scores using MFL's default current-year export endpoint.
@@ -322,6 +327,28 @@ def player_points_by_id(scores_json: dict[str, Any]) -> dict[str, float]:
         except (TypeError, ValueError):
             continue
     return points_out
+
+
+def accounting_balance_by_franchise(accounting_json: dict[str, Any]) -> dict[str, float]:
+    """
+    franchise id -> net total from accounting export entries (sum of ``amount``).
+    Aligns with per-team totals on the MFL accounting report page.
+    """
+    block = accounting_json.get("accounting") or {}
+    entries = _normalize_transaction_list(block.get("entry"))
+    totals: dict[str, float] = {}
+    for row in entries:
+        franchise_id = row.get("franchise_id")
+        if franchise_id is None or str(franchise_id).strip() == "":
+            continue
+        fid = str(franchise_id).strip()
+        raw_amount = str(row.get("amount") or "0").replace(",", "").strip()
+        try:
+            amount = float(raw_amount)
+        except ValueError:
+            continue
+        totals[fid] = totals.get(fid, 0.0) + amount
+    return totals
 
 
 def draft_picks_by_franchise(

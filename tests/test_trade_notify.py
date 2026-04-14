@@ -7,7 +7,11 @@ import tempfile
 import time
 from pathlib import Path
 
-from src.mfl_client import draft_picks_by_franchise, player_points_by_id
+from src.mfl_client import (
+    accounting_balance_by_franchise,
+    draft_picks_by_franchise,
+    player_points_by_id,
+)
 from src.trade_notify import (
     TRADE_BAIT_COMMENTARY_LINES,
     TRADE_COMMENTARY_LINES,
@@ -16,6 +20,7 @@ from src.trade_notify import (
     format_draft_picks_report_text,
     format_cap_space_report_text,
     format_roster_breakdown_report_text,
+    format_traded_future_picks_with_accounting_report_text,
     format_future_pick_token,
     format_trade_text,
     is_trade_bait_too_old_to_announce,
@@ -34,6 +39,7 @@ from src.trade_notify import (
     top_trader_counts,
     cap_space_available_by_franchise,
     roster_slot_counts_by_franchise,
+    traded_own_future_pick_rounds_by_franchise,
 )
 
 
@@ -528,13 +534,53 @@ def test_format_draft_picks_report_text_renders_sections() -> None:
     franchise_names = {"0001": "Team A"}
     current_map = {"0001": ["Round 1.01"]}
     future_map = {"0001": ["Year 2027 Round 2 from Team B"]}
-    text = format_draft_picks_report_text(franchise_names, current_map, future_map)
+    text = format_draft_picks_report_text(
+        franchise_names,
+        current_map,
+        future_map,
+        report_season_year=2026,
+    )
     assert "Draft Picks Report (Current + Future)" in text
     assert "Team A" in text
-    assert "Current Year Picks:" in text
-    assert "* Round 1.01" in text
-    assert "Future Picks:" in text
-    assert "* Year 2027 Round 2 from Team B" in text
+    assert "* 2026 Picks: 1.01" in text
+    assert "* 2027 Picks: 2 (Team B)" in text
+
+
+def test_format_draft_picks_report_text_compact_two_franchises() -> None:
+    franchise_names = {
+        "0001": "Harley Quinn and the Gotham City Sirens",
+        "0002": "Plato's Academy",
+    }
+    current_map = {
+        "0001": [
+            "Year 2026 Draft Pick 1.02",
+            "Year 2026 Draft Pick 5.17",
+            "Year 2026 Draft Pick 5.25",
+            "Year 2026 Draft Pick 6.12",
+            "Year 2026 Draft Pick 6.26",
+        ],
+        "0002": ["Year 2026 Draft Pick 1.01", "Year 2026 Draft Pick 2.05"],
+    }
+    future_map = {
+        "0001": [
+            "Year 2027 Round 6 Draft Pick from Harley Quinn and the Gotham City Sirens"
+        ],
+        "0002": ["Year 2027 Round 2 Draft Pick from Stripes and Scales"],
+    }
+    text = format_draft_picks_report_text(
+        franchise_names,
+        current_map,
+        future_map,
+        report_season_year=2026,
+    )
+    assert "Harley Quinn and the Gotham City Sirens" in text
+    assert "* 2026 Picks: 1.02, 5.17, 5.25, 6.12, 6.26" in text
+    assert "* 2027 Picks: 6 (Harley Quinn and the Gotham City Sirens)" in text
+    assert "Plato's Academy" in text
+    assert "* 2026 Picks: 1.01, 2.05" in text
+    assert "* 2027 Picks: 2 (Stripes and Scales)" in text
+    # Alphabetical by team name: Harley before Plato
+    assert text.index("Harley") < text.index("Plato")
 
 
 def test_cap_space_available_by_franchise_parses_salary_cap_amount() -> None:
@@ -584,13 +630,90 @@ def test_roster_slot_counts_by_franchise_splits_active_taxi_ir() -> None:
     assert counts["0001"]["ir"] == 1
 
 
-def test_format_roster_breakdown_report_text_renders_expected_lines() -> None:
+def test_format_roster_breakdown_report_text_renders_expected_lines_legacy_no_cap() -> None:
     franchise_names = {"0010": "Glass Joe's Revenge", "0002": "#NAME?"}
     slot_counts = {
         "0010": {"active": 23, "taxi": 0, "ir": 0},
         "0002": {"active": 26, "taxi": 0, "ir": 0},
     }
-    text = format_roster_breakdown_report_text(franchise_names, slot_counts)
+    text = format_roster_breakdown_report_text(
+        franchise_names,
+        slot_counts,
+        title="Players by Team (Active / Taxi / IR)",
+        cap_available_by_franchise=None,
+    )
     assert "Players by Team (Active / Taxi / IR)" in text
     assert "1) #NAME? - 26 / 0 / 0" in text
     assert "2) Glass Joe's Revenge - 23 / 0 / 0" in text
+
+
+def test_format_roster_breakdown_report_text_includes_cap_remain() -> None:
+    franchise_names = {"0010": "Glass Joe's Revenge", "0002": "#NAME?"}
+    slot_counts = {
+        "0010": {"active": 23, "taxi": 0, "ir": 0},
+        "0002": {"active": 26, "taxi": 0, "ir": 0},
+    }
+    cap = {"0010": 22.7, "0002": 100.0}
+    text = format_roster_breakdown_report_text(
+        franchise_names, slot_counts, cap_available_by_franchise=cap
+    )
+    assert "Players by Team (Active / Taxi / IR / $ Cap Remain)" in text
+    assert "1) #NAME? - 26 / 0 / 0 / $100" in text
+    assert "2) Glass Joe's Revenge - 23 / 0 / 0 / $23" in text
+
+
+def test_format_roster_breakdown_report_text_cap_missing_shows_em_dash() -> None:
+    franchise_names = {"0001": "Solo"}
+    slot_counts = {"0001": {"active": 5, "taxi": 0, "ir": 0}}
+    text = format_roster_breakdown_report_text(
+        franchise_names, slot_counts, cap_available_by_franchise={}
+    )
+    assert "1) Solo - 5 / 0 / 0 / —" in text
+
+
+def test_traded_own_future_pick_rounds_by_franchise_detects_missing_rounds() -> None:
+    league_json = {
+        "league": {
+            "franchises": {
+                "franchise": [
+                    {"id": "0010", "future_draft_picks": "FP_0010_2027_1,FP_0010_2027_2,FP_0010_2027_4,"},
+                    {"id": "0009", "future_draft_picks": "FP_0009_2027_1,FP_0009_2027_2,FP_0009_2027_3,FP_0009_2027_4,FP_0009_2027_5,FP_0009_2027_6,"},
+                ]
+            }
+        }
+    }
+    traded = traded_own_future_pick_rounds_by_franchise(
+        league_json,
+        target_year=2027,
+        total_rounds=6,
+    )
+    assert traded["0010"] == [3, 5, 6]
+    assert "0009" not in traded
+
+
+def test_accounting_balance_by_franchise_sums_entries() -> None:
+    accounting_json = {
+        "accounting": {
+            "entry": [
+                {"franchise_id": "0001", "amount": "-250"},
+                {"franchise_id": "0001", "amount": "325.00"},
+                {"franchise_id": "0001", "amount": "175"},
+            ]
+        }
+    }
+    out = accounting_balance_by_franchise(accounting_json)
+    assert out["0001"] == 250.0
+
+
+def test_format_traded_future_picks_with_accounting_report_text() -> None:
+    names = {"0010": "Glass Joe's Revenge"}
+    traded = {"0010": [5, 6]}
+    accounting = {"0010": 250.0}
+    text = format_traded_future_picks_with_accounting_report_text(
+        names,
+        traded,
+        accounting,
+        target_year=2027,
+    )
+    assert "Team Name | 2027 Own Picks Traded | Accounting Balance" in text
+    assert "Glass Joe's Revenge | 5, 6 | $250.00" in text
