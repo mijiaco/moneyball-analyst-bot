@@ -319,6 +319,35 @@ def _split_gave_up(raw: str | None) -> list[str]:
     return [text.rstrip(",")]
 
 
+def trade_sending_side_includes_own_future_year_pick(
+    gave_up: str | None,
+    sending_franchise_id: str,
+    target_year: int,
+) -> bool:
+    """
+    True if gave_up includes an FP token for this franchise's own pick in ``target_year``
+    (``FP_<franchise_id>_<year>_<round>``).
+    """
+    tokens = _split_gave_up(gave_up)
+    send = str(sending_franchise_id).strip()
+    for t in tokens:
+        if not t.startswith("FP_"):
+            continue
+        rest = t[3:].split("_")
+        if len(rest) < 3:
+            continue
+        orig_fr, year_s, _rnd_s = rest[0], rest[1], rest[2]
+        if orig_fr != send:
+            continue
+        try:
+            year = int(year_s)
+        except ValueError:
+            continue
+        if year == target_year:
+            return True
+    return False
+
+
 def _build_player_name_index(players: dict[str, str]) -> dict[str, str]:
     """
     Build a normalized player label -> player id index.
@@ -533,6 +562,10 @@ def format_trade_text(
     salaries_by_franchise: dict[str, dict[str, str]] | None = None,
     points_by_player_id: dict[str, float] | None = None,
     contract_years_by_franchise: dict[str, dict[str, str]] | None = None,
+    *,
+    accounting_balance_by_franchise: dict[str, float] | None = None,
+    unpaid_accounting_threshold: float = 250.0,
+    unpaid_future_pick_year: int = 2027,
 ) -> str:
     salaries = salaries_by_franchise if salaries_by_franchise is not None else {}
     contract_years = (
@@ -570,7 +603,22 @@ def format_trade_text(
     if comments:
         safe = comments.replace("`", "'")[:500]
         header += f"\n_Comments:_ {safe}"
-    return f"{random_trade_commentary()}\n\n{header}"
+    out_parts: list[str] = [random_trade_commentary(), header]
+    if accounting_balance_by_franchise is not None:
+        for fid, tname, gave in (
+            (f1, name1, tx.get("franchise1_gave_up")),
+            (f2, name2, tx.get("franchise2_gave_up")),
+        ):
+            if not trade_sending_side_includes_own_future_year_pick(
+                gave, fid, unpaid_future_pick_year
+            ):
+                continue
+            bal = float(accounting_balance_by_franchise.get(fid, 0.0))
+            if bal < unpaid_accounting_threshold:
+                out_parts.append(
+                    f"Invalid trade. {tname} hasn't paid for 2027 picks yet."
+                )
+    return "\n\n".join(out_parts)
 
 
 def format_trade_bait_text(
@@ -1032,12 +1080,26 @@ def format_traded_future_picks_with_accounting_report_text(
     accounting_balance_by_franchise: dict[str, float],
     *,
     target_year: int,
+    accounting_balance_under: float = 250.0,
 ) -> str:
-    title = f"Teams That Traded {target_year} Own Picks"
+    title = "Unpaid Owners / Traded Picks"
     if not traded_rounds_by_franchise:
-        return f"{title}\n\nNo teams have traded their own {target_year} picks."
+        return (
+            f"{title}\n\nNo teams have traded their own {target_year} picks."
+        )
+    filtered: dict[str, list[int]] = {}
+    for franchise_id, rounds in traded_rounds_by_franchise.items():
+        balance = float(accounting_balance_by_franchise.get(franchise_id, 0.0))
+        if balance < accounting_balance_under:
+            filtered[franchise_id] = rounds
+    if not filtered:
+        return (
+            f"{title}\n\n"
+            f"No teams qualify (traded own {target_year} picks and accounting balance "
+            f"under ${accounting_balance_under:,.2f})."
+        )
     ordered_ids = sorted(
-        traded_rounds_by_franchise.keys(),
+        filtered.keys(),
         key=lambda franchise_id: franchise_names.get(
             franchise_id, f"Franchise {franchise_id}"
         ).casefold(),
@@ -1050,9 +1112,9 @@ def format_traded_future_picks_with_accounting_report_text(
     ]
     for franchise_id in ordered_ids:
         team_name = franchise_names.get(franchise_id, f"Franchise {franchise_id}")
-        traded_rounds = traded_rounds_by_franchise.get(franchise_id, [])
+        traded_rounds = filtered.get(franchise_id, [])
         rounds_text = ", ".join(str(round_number) for round_number in traded_rounds)
-        accounting_balance = accounting_balance_by_franchise.get(franchise_id, 0.0)
+        accounting_balance = float(accounting_balance_by_franchise.get(franchise_id, 0.0))
         lines.append(f"{team_name} | {rounds_text} | ${accounting_balance:,.2f}")
     return "\n".join(lines)
 
@@ -1115,16 +1177,18 @@ async def dry_run(
                 total_rounds=total_rounds,
             )
             accounting_totals = accounting_balance_by_franchise(accounting_json)
+            unpaid_threshold = float(os.environ.get("MFL_UNPAID_ACCOUNTING_THRESHOLD", "250"))
             print(
                 format_traded_future_picks_with_accounting_report_text(
                     franchise_names,
                     traded_rounds,
                     accounting_totals,
                     target_year=2027,
+                    accounting_balance_under=unpaid_threshold,
                 )
             )
             print(
-                "(dry-run: traded 2027 own picks; balances from TYPE=accounting export)",
+                "(dry-run: unpaid/traded picks report; balances from TYPE=accounting export)",
                 file=sys.stderr,
             )
             return 0
@@ -1142,10 +1206,14 @@ async def dry_run(
         rosters_json = await client.fetch_rosters()
         await client.sleep_between_exports()
         scores_json = await client.fetch_player_scores_current_year()
+        await client.sleep_between_exports()
+        accounting_json = await client.fetch_accounting()
     finally:
         await client.aclose()
 
     franchise_names = franchise_names_from_league(league_json)
+    accounting_totals = accounting_balance_by_franchise(accounting_json)
+    unpaid_threshold = float(os.environ.get("MFL_UNPAID_ACCOUNTING_THRESHOLD", "250"))
     salaries = player_salaries_by_franchise(rosters_json)
     contract_years = player_contract_years_by_franchise(rosters_json)
     points_by_player_id = player_points_by_id(scores_json)
@@ -1223,6 +1291,8 @@ async def dry_run(
                 salaries,
                 points_by_player_id,
                 contract_years,
+                accounting_balance_by_franchise=accounting_totals,
+                unpaid_accounting_threshold=unpaid_threshold,
             )
         )
         pending = not is_processed_trade(tx, now)
@@ -1266,6 +1336,8 @@ async def dry_run(
                 salaries,
                 points_by_player_id,
                 contract_years,
+                accounting_balance_by_franchise=accounting_totals,
+                unpaid_accounting_threshold=unpaid_threshold,
             )
         )
         print("---")
@@ -1559,7 +1631,10 @@ def main() -> None:
     parser.add_argument(
         "--traded-2027-picks-report",
         action="store_true",
-        help="With --dry-run, print teams that traded own 2027 picks with accounting balance.",
+        help=(
+            "With --dry-run, print Unpaid Owners / Traded Picks: teams that traded own 2027 picks "
+            "with accounting balance under MFL_UNPAID_ACCOUNTING_THRESHOLD (default 250)."
+        ),
     )
     parser.add_argument(
         "--post-roster-breakdown-discord",

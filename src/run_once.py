@@ -8,6 +8,7 @@ import logging
 import os
 import sys
 from datetime import datetime
+from typing import Any
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -15,7 +16,12 @@ import certifi
 import httpx
 from dotenv import load_dotenv
 
-from src.mfl_client import MflClient, draft_picks_by_franchise, franchise_names_from_league
+from src.mfl_client import (
+    MflClient,
+    accounting_balance_by_franchise,
+    draft_picks_by_franchise,
+    franchise_names_from_league,
+)
 from src.mfl_env import (
     missing_mfl_connect_env_names,
     mfl_connect_env_help_suffix,
@@ -26,11 +32,13 @@ from src.trade_notify import (
     env_bool,
     format_draft_picks_report_text,
     format_roster_breakdown_report_text,
+    format_traded_future_picks_with_accounting_report_text,
     format_top_traders_text,
     load_seen,
     roster_slot_counts_by_franchise,
     save_seen,
     top_trader_counts,
+    traded_own_future_pick_rounds_by_franchise,
 )
 from src.trade_poll_core import poll_trades_for_new_messages
 
@@ -74,25 +82,33 @@ def _weekly_reports_state_path(data_dir: Path) -> Path:
     return data_dir / "reports_state.json"
 
 
-def _load_last_weekly_reports_week_key(state_path: Path) -> str:
+def _read_reports_state_json(state_path: Path) -> dict[str, Any]:
     if not state_path.is_file():
-        return ""
+        return {}
     try:
-        payload = json.loads(state_path.read_text(encoding="utf-8"))
+        raw = json.loads(state_path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
-        return ""
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _write_reports_state_json(state_path: Path, data: dict[str, Any]) -> None:
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = state_path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, sort_keys=True), encoding="utf-8")
+    os.replace(tmp, state_path)
+
+
+def _load_last_weekly_reports_week_key(state_path: Path) -> str:
+    payload = _read_reports_state_json(state_path)
     week_key = payload.get("last_weekly_reports_week_key")
     return str(week_key).strip() if week_key is not None else ""
 
 
 def _save_last_weekly_reports_week_key(state_path: Path, week_key: str) -> None:
-    state_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = state_path.with_suffix(".tmp")
-    tmp.write_text(
-        json.dumps({"last_weekly_reports_week_key": week_key}, sort_keys=True),
-        encoding="utf-8",
-    )
-    os.replace(tmp, state_path)
+    data = _read_reports_state_json(state_path)
+    data["last_weekly_reports_week_key"] = week_key
+    _write_reports_state_json(state_path, data)
 
 
 def _current_week_key_et(now_et: datetime) -> str:
@@ -105,6 +121,11 @@ def _is_weekly_reports_due(now_et: datetime) -> bool:
     return now_et.weekday() == 5 and (
         now_et.hour > 15 or (now_et.hour == 15 and now_et.minute >= 30)
     )
+
+
+def _is_sunday_unpaid_report_due(now_et: datetime) -> bool:
+    # Sunday at/after 1:00 PM Eastern Time
+    return now_et.weekday() == 6 and now_et.hour >= 13
 
 
 def _as_of_label_et(now_et: datetime) -> str:
@@ -175,6 +196,7 @@ async def _async_main() -> int:
     weekly_reports_include_roster_breakdown = env_bool(
         "MFL_WEEKLY_REPORTS_INCLUDE_ROSTER_BREAKDOWN", True
     )
+    sunday_unpaid_report_enabled = env_bool("MFL_SUNDAY_UNPAID_REPORT_ENABLED", True)
 
     connect = mfl_connect_settings()
     if connect is None:
@@ -303,6 +325,64 @@ async def _async_main() -> int:
                             )
                         )
                     _save_last_weekly_reports_week_key(reports_state_path, current_week_key)
+                    updated_reports_state = True
+
+        if sunday_unpaid_report_enabled:
+            now_sun = datetime.now(ZoneInfo("America/New_York"))
+            if _is_sunday_unpaid_report_due(now_sun):
+                reports_state = _read_reports_state_json(reports_state_path)
+                today_et = now_sun.date().isoformat()
+                if reports_state.get("last_unpaid_owners_sunday_date_et") != today_et:
+                    await mfl.sleep_between_exports()
+                    league_json = await mfl.fetch_league()
+                    await mfl.sleep_between_exports()
+                    accounting_json = await mfl.fetch_accounting()
+                    franchise_names = franchise_names_from_league(league_json)
+                    total_rounds = int(os.environ.get("MFL_DRAFT_ROUNDS", "6"))
+                    traded_rounds = traded_own_future_pick_rounds_by_franchise(
+                        league_json, target_year=2027, total_rounds=total_rounds
+                    )
+                    accounting_totals = accounting_balance_by_franchise(accounting_json)
+                    unpaid_threshold = float(
+                        os.environ.get("MFL_UNPAID_ACCOUNTING_THRESHOLD", "250")
+                    )
+                    report_text = format_traded_future_picks_with_accounting_report_text(
+                        franchise_names,
+                        traded_rounds,
+                        accounting_totals,
+                        target_year=2027,
+                        accounting_balance_under=unpaid_threshold,
+                    )
+                    as_of_line = f"As of {_as_of_label_et(now_sun)}"
+                    disclaimer = (
+                        "These teams owe the balance for 2027 for trading away 1 or more of "
+                        "their 2027 picks. Note: this list could be outdated if MFL accounting "
+                        "balance hasn't been updated."
+                    )
+                    body = (
+                        report_text.split("\n\n", 1)[1]
+                        if "\n\n" in report_text
+                        else report_text
+                    )
+                    description = f"{as_of_line}\n\n{disclaimer}\n\n{body}"
+                    if len(description) > 4096:
+                        description = description[:4093] + "..."
+                    pending_posts.append(
+                        (
+                            f"SUNDAY_UNPAID|{today_et}",
+                            type(
+                                "Payload",
+                                (),
+                                {
+                                    "title": "Unpaid Owners / Traded Picks",
+                                    "description": description,
+                                    "color": 15105570,
+                                },
+                            )(),
+                        )
+                    )
+                    reports_state["last_unpaid_owners_sunday_date_et"] = today_et
+                    _write_reports_state_json(reports_state_path, reports_state)
                     updated_reports_state = True
     except httpx.HTTPStatusError as exc:
         logger.exception("Upstream HTTP error: %s", exc)

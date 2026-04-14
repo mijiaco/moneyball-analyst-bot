@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import os
 import time
 from typing import Any
 
 import discord
 from src.mfl_client import (
     MflClient,
+    accounting_balance_by_franchise,
     franchise_names_from_league,
     player_contract_years_by_franchise,
     player_points_by_id,
@@ -71,11 +73,15 @@ async def poll_trades_for_new_messages(
     except Exception:
         # Keep polling alive when scores export is unavailable.
         player_scores_json = {}
+    await mfl.sleep_between_exports()
+    accounting_json = await mfl.fetch_accounting()
+    accounting_totals = accounting_balance_by_franchise(accounting_json)
     salaries_by_franchise = player_salaries_by_franchise(rosters_json)
     contract_years_by_franchise = player_contract_years_by_franchise(rosters_json)
     points_by_player_id = player_points_by_id(player_scores_json)
 
     franchise_names = franchise_names_from_league(league_json)
+    unpaid_threshold = float(os.environ.get("MFL_UNPAID_ACCOUNTING_THRESHOLD", "250"))
     now = time.time()
     out: list[tuple[str, TradeMessagePayload]] = []
     updated = False
@@ -107,6 +113,8 @@ async def poll_trades_for_new_messages(
             salaries_by_franchise,
             points_by_player_id,
             contract_years_by_franchise,
+            accounting_balance_by_franchise=accounting_totals,
+            unpaid_accounting_threshold=unpaid_threshold,
         )
         if len(body) > DISCORD_DESCRIPTION_LIMIT:
             body = body[: DISCORD_DESCRIPTION_LIMIT - 3] + "..."

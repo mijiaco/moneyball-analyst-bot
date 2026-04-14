@@ -40,6 +40,7 @@ from src.trade_notify import (
     cap_space_available_by_franchise,
     roster_slot_counts_by_franchise,
     traded_own_future_pick_rounds_by_franchise,
+    trade_sending_side_includes_own_future_year_pick,
 )
 
 
@@ -218,6 +219,63 @@ def test_format_future_pick_token() -> None:
     names = {"0022": "Plato's Academy"}
     assert "2027" in format_future_pick_token("FP_0022_2027_1", names)
     assert "Plato" in format_future_pick_token("FP_0022_2027_1", names)
+
+
+def test_trade_sending_side_includes_own_future_year_pick() -> None:
+    assert (
+        trade_sending_side_includes_own_future_year_pick(
+            "FP_0009_2027_1,FP_0024_2027_2", "0009", 2027
+        )
+        is True
+    )
+    assert (
+        trade_sending_side_includes_own_future_year_pick(
+            "FP_0024_2027_1", "0009", 2027
+        )
+        is False
+    )
+
+
+def test_format_trade_text_warns_when_own_2027_pick_and_low_accounting() -> None:
+    tx = {
+        "franchise": "0009",
+        "franchise2": "0024",
+        "franchise1_gave_up": "FP_0009_2027_1",
+        "franchise2_gave_up": "",
+    }
+    franchises = {"0009": "Team A", "0024": "Team B"}
+    players: dict[str, str] = {}
+    accounting = {"0009": 100.0, "0024": 500.0}
+    text = format_trade_text(
+        tx,
+        franchises,
+        players,
+        2026,
+        accounting_balance_by_franchise=accounting,
+        unpaid_accounting_threshold=250.0,
+    )
+    assert "Invalid trade. Team A hasn't paid for 2027 picks yet." in text
+    assert "Invalid trade. Team B" not in text
+
+
+def test_format_trade_text_no_unpaid_warning_when_balance_ok() -> None:
+    tx = {
+        "franchise": "0009",
+        "franchise2": "0024",
+        "franchise1_gave_up": "FP_0009_2027_1",
+        "franchise2_gave_up": "",
+    }
+    franchises = {"0009": "Team A", "0024": "Team B"}
+    players: dict[str, str] = {}
+    accounting = {"0009": 300.0, "0024": 500.0}
+    text = format_trade_text(
+        tx,
+        franchises,
+        players,
+        2026,
+        accounting_balance_by_franchise=accounting,
+    )
+    assert "Invalid trade." not in text
 
 
 def test_format_trade_text() -> None:
@@ -708,6 +766,21 @@ def test_accounting_balance_by_franchise_sums_entries() -> None:
 def test_format_traded_future_picks_with_accounting_report_text() -> None:
     names = {"0010": "Glass Joe's Revenge"}
     traded = {"0010": [5, 6]}
+    accounting = {"0010": 249.0}
+    text = format_traded_future_picks_with_accounting_report_text(
+        names,
+        traded,
+        accounting,
+        target_year=2027,
+    )
+    assert "Unpaid Owners / Traded Picks" in text
+    assert "Team Name | 2027 Own Picks Traded | Accounting Balance" in text
+    assert "Glass Joe's Revenge | 5, 6 | $249.00" in text
+
+
+def test_format_traded_future_picks_excludes_balance_at_or_above_threshold() -> None:
+    names = {"0010": "Glass Joe's Revenge"}
+    traded = {"0010": [5, 6]}
     accounting = {"0010": 250.0}
     text = format_traded_future_picks_with_accounting_report_text(
         names,
@@ -715,5 +788,6 @@ def test_format_traded_future_picks_with_accounting_report_text() -> None:
         accounting,
         target_year=2027,
     )
-    assert "Team Name | 2027 Own Picks Traded | Accounting Balance" in text
-    assert "Glass Joe's Revenge | 5, 6 | $250.00" in text
+    assert "Unpaid Owners / Traded Picks" in text
+    assert "Glass Joe" not in text
+    assert "under $250.00" in text
