@@ -20,7 +20,7 @@ import certifi
 import httpx
 from dotenv import load_dotenv
 
-from src.discord_env import discord_target_channel_id
+from src.discord_env import discord_production_channel_id, discord_target_channel_id
 from src.mfl_client import (
     MflClient,
     accounting_balance_by_franchise,
@@ -1583,6 +1583,103 @@ async def post_draft_picks_embeds_to_discord() -> int:
     return 0
 
 
+async def post_top_traders_embed_to_discord() -> int:
+    """Post Top Traders This Year; uses main channel only (``discord_production_channel_id()``)."""
+    _dotenv_path = Path(__file__).resolve().parent.parent / ".env"
+    load_dotenv(_dotenv_path, override=True)
+    token = (os.environ.get("DISCORD_BOT_TOKEN") or "").strip()
+    channel_id = discord_production_channel_id()
+    if not token:
+        print("DISCORD_BOT_TOKEN is required.", file=sys.stderr)
+        return 1
+    if not channel_id:
+        print(
+            "Set DISCORD_CHANNEL_ID or PROD_DISCORD_CHANNEL_ID (main channel; "
+            "TEST_DISCORD_CHANNEL_ID is ignored for this command).",
+            file=sys.stderr,
+        )
+        return 1
+
+    connect = mfl_connect_settings()
+    if connect is None:
+        miss = ", ".join(missing_mfl_connect_env_names())
+        print(
+            f"Missing required env: {miss}. {mfl_connect_env_help_suffix()}",
+            file=sys.stderr,
+        )
+        return 1
+
+    host, year, league_id = connect
+    season_year = int(year)
+    lookback_days = current_season_lookback_days(season_year)
+    api_key = os.environ.get("MFL_API_KEY") or None
+    user_agent = os.environ.get("MFL_USER_AGENT") or None
+    data_dir = Path(__file__).resolve().parent.parent / "data"
+    players_cache = data_dir / "players_cache.json"
+
+    client = MflClient(
+        host=host,
+        year=year,
+        league_id=league_id,
+        api_key=api_key,
+        user_agent=user_agent,
+        players_cache_path=players_cache,
+    )
+    try:
+        transactions = await client.fetch_transactions_trade_days(lookback_days)
+        await client.sleep_between_exports()
+        league_json = await client.fetch_league()
+    finally:
+        await client.aclose()
+
+    franchise_names = franchise_names_from_league(league_json)
+    counts = top_trader_counts(transactions, dedupe_by_trade=True)
+    now_et = datetime.now(ZoneInfo("America/New_York"))
+    as_of_line = f"As of {now_et.strftime('%Y-%m-%d %I:%M %p ET')}"
+    top_traders_text = format_top_traders_text(
+        counts,
+        franchise_names,
+        title="Top Traders This Year",
+        week_of_label=now_et.date().isoformat(),
+        disclaimer=(
+            "Disclaimer: this includes some test trades from early in the year."
+        ),
+        top_n=0,
+    )
+    body_text = (
+        top_traders_text.split("\n\n", 1)[1]
+        if "\n\n" in top_traders_text
+        else top_traders_text
+    )
+    chunks = _chunk_text_for_discord_embeds(body_text, max_len=3900)
+    total = len(chunks)
+    color = 15844367
+    for index, chunk in enumerate(chunks, start=1):
+        title = "Top Traders This Year"
+        if total > 1:
+            title = f"Top Traders This Year ({index}/{total})"
+        description = f"{as_of_line}\n\n{chunk}"
+        if len(description) > 4096:
+            description = description[:4093] + "..."
+        ok = await _discord_post_embed(
+            token=token,
+            channel_id=channel_id,
+            title=title,
+            description=description,
+            color=color,
+        )
+        if not ok:
+            return 1
+        if index < total:
+            await asyncio.sleep(0.6)
+
+    print(
+        f"Posted Top Traders embed(s) to main Discord channel ({total}).",
+        file=sys.stderr,
+    )
+    return 0
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Fetch league trades and print formatted output.",
@@ -1652,6 +1749,14 @@ def main() -> None:
             "--post-roster-breakdown-discord)."
         ),
     )
+    parser.add_argument(
+        "--post-top-traders-discord",
+        action="store_true",
+        help=(
+            "Post Top Traders This Year to main Discord (DISCORD_CHANNEL_ID or "
+            "PROD_DISCORD_CHANNEL_ID only; TEST_DISCORD_CHANNEL_ID is ignored)."
+        ),
+    )
     args = parser.parse_args()
 
     mode_flags = (
@@ -1664,9 +1769,15 @@ def main() -> None:
         args.roster_breakdown_report,
         args.traded_2027_picks_report,
     )
-    if args.post_roster_breakdown_discord and args.post_draft_picks_discord:
+    post_discord_flags = (
+        args.post_roster_breakdown_discord,
+        args.post_draft_picks_discord,
+        args.post_top_traders_discord,
+    )
+    if sum(1 for f in post_discord_flags if f) > 1:
         parser.error(
-            "use only one of --post-roster-breakdown-discord or --post-draft-picks-discord"
+            "use only one of --post-roster-breakdown-discord, --post-draft-picks-discord, "
+            "or --post-top-traders-discord"
         )
     if args.post_roster_breakdown_discord:
         if any(mode_flags):
@@ -1682,6 +1793,13 @@ def main() -> None:
                 "or other report flags"
             )
         raise SystemExit(asyncio.run(post_draft_picks_embeds_to_discord()))
+    if args.post_top_traders_discord:
+        if any(mode_flags):
+            parser.error(
+                "--post-top-traders-discord cannot be combined with --dry-run "
+                "or other report flags"
+            )
+        raise SystemExit(asyncio.run(post_top_traders_embed_to_discord()))
 
     if args.dry_run:
         if args.last_trade and args.with_dedupe:

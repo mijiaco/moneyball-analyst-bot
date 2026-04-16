@@ -12,3 +12,12 @@ def discord_target_channel_id() -> str:
         if raw is not None and str(raw).strip() != "":
             return str(raw).strip()
     return ""
+
+
+def discord_production_channel_id() -> str:
+    """DISCORD_CHANNEL_ID or PROD_DISCORD_CHANNEL_ID only; ignores TEST_DISCORD_CHANNEL_ID."""
+    for key in ("DISCORD_CHANNEL_ID", "PROD_DISCORD_CHANNEL_ID"):
+        raw = os.environ.get(key)
+        if raw is not None and str(raw).strip() != "":
+            return str(raw).strip()
+    return ""
