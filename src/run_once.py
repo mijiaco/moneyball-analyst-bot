@@ -271,6 +271,7 @@ async def _async_main() -> int:
                             franchise_names,
                             current_map,
                             future_map,
+                            report_season_year=season_year,
                         )
                         draft_chunks = _chunk_text_by_sections(draft_report_text, max_len=3900)
                         total_chunks = len(draft_chunks)
