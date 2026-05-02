@@ -7,6 +7,12 @@ import tempfile
 import time
 from pathlib import Path
 
+from src.draft_notify import (
+    draft_pick_notification_key,
+    format_draft_pick_text,
+    is_draft_pick_too_old_to_announce,
+    selected_draft_picks_from_results,
+)
 from src.mfl_client import (
     accounting_balance_by_franchise,
     draft_picks_by_franchise,
@@ -182,6 +188,117 @@ def test_trade_bait_notification_key_stable() -> None:
     key = trade_bait_notification_key(tb)
     assert key.startswith("TB|0007|1775583753|16644|")
     assert "Trading for picks" in key
+
+
+def test_selected_draft_picks_from_results_parses_completed_picks() -> None:
+    payload = {
+        "draftResults": {
+            "draftUnit": {
+                "draftPick": [
+                    {
+                        "franchise": "0017",
+                        "player": "17001",
+                        "round": "01",
+                        "pick": "01",
+                        "timestamp": "1775583753",
+                    },
+                    {
+                        "franchise": "0010",
+                        "player": "",
+                        "round": "01",
+                        "pick": "02",
+                        "timestamp": "",
+                    },
+                ]
+            }
+        }
+    }
+    selections = selected_draft_picks_from_results(payload)
+    assert len(selections) == 1
+    assert selections[0].franchise_id == "0017"
+    assert selections[0].player_id == "17001"
+    assert selections[0].slot == "1.01"
+    assert selections[0].overall_index == 1
+    assert draft_pick_notification_key(selections[0], 2026) == (
+        "DRAFT_PICK|2026|1.01|0017|17001"
+    )
+
+
+def test_draft_pick_age_gate() -> None:
+    selection = selected_draft_picks_from_results(
+        {
+            "draftResults": {
+                "draftUnit": {
+                    "draftPick": {
+                        "franchise": "0017",
+                        "player": "17001",
+                        "round": "01",
+                        "pick": "01",
+                        "timestamp": "1000",
+                    }
+                }
+            }
+        }
+    )[0]
+    assert is_draft_pick_too_old_to_announce(selection, 1000 + 49 * 3600, 48) is True
+    assert is_draft_pick_too_old_to_announce(selection, 1000 + 47 * 3600, 48) is False
+    assert is_draft_pick_too_old_to_announce(selection, 1000 + 49 * 3600, 0) is False
+
+
+def test_format_draft_pick_text_includes_position_room_sorted_with_salary_points() -> None:
+    selection = selected_draft_picks_from_results(
+        {
+            "draftResults": {
+                "draftUnit": {
+                    "draftPick": {
+                        "franchise": "0017",
+                        "player": "17001",
+                        "round": "01",
+                        "pick": "01",
+                        "timestamp": "1775583753",
+                    }
+                }
+            }
+        }
+    )[0]
+    franchises = {"0017": "Lone Star Lambs"}
+    players = {
+        "17001": "Love, Jeremiyah ARI RB",
+        "16001": "Tracy, Tyrone NYG RB",
+        "16002": "Robinson, Brian ATL RB",
+        "16003": "Bowers, Brock LVR TE",
+    }
+    rosters_json = {
+        "rosters": {
+            "franchise": {
+                "id": "0017",
+                "player": [
+                    {"id": "16001"},
+                    {"id": "16003"},
+                    {"id": "16002"},
+                ],
+            }
+        }
+    }
+    salaries = {"0017": {"16001": "35", "16002": "34"}}
+    points = {"16001": 169.9, "16002": 87.9}
+    text = format_draft_pick_text(
+        selection,
+        franchises,
+        players,
+        rosters_json,
+        salaries,
+        points,
+    )
+    assert text.startswith("The consensus big boards were right on this one!")
+    assert "Lone Star Lambs selects **Love, Jeremiyah ARI RB** at 1.01." in text
+    assert "Lone Star Lambs' newest room of RBs is now:" in text
+    assert "* **Love, Jeremiyah ARI RB**" in text
+    assert "* Robinson, Brian ATL RB ($34 / 87.9 pts)" in text
+    assert "* Tracy, Tyrone NYG RB ($35 / 169.9 pts)" in text
+    assert text.index("Love, Jeremiyah") < text.index("Robinson, Brian")
+    assert text.index("Robinson, Brian") < text.index("Tracy, Tyrone")
+    assert "Bowers" not in text
 
 
 def test_trade_bait_age_gate() -> None:

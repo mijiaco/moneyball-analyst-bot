@@ -106,6 +106,10 @@ class MflClient:
         data = await self._get_json({"TYPE": "assets"})
         return data if isinstance(data, dict) else {}
 
+    async def fetch_draft_results(self) -> dict[str, Any]:
+        data = await self._get_json({"TYPE": "draftResults"})
+        return data if isinstance(data, dict) else {}
+
     async def fetch_accounting(self) -> dict[str, Any]:
         """League accounting ledger (same source as the site accounting report)."""
         data = await self._get_json({"TYPE": "accounting"})

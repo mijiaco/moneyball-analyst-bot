@@ -73,6 +73,7 @@ class TradeBot(discord.Client):
         self._announce_pending = env_bool("MFL_ANNOUNCE_PENDING_TRADES", True)
         self._notify_once_per_trade = env_bool("MFL_NOTIFY_ONCE_PER_TRADE", True)
         self._announce_trade_bait = env_bool("MFL_ANNOUNCE_TRADE_BAIT", True)
+        self._announce_draft_picks = env_bool("MFL_ANNOUNCE_DRAFT_PICKS", True)
         self._weekly_top_traders_enabled = env_bool("MFL_WEEKLY_TOP_TRADERS_ENABLED", True)
         self._weekly_top_traders_last_week_key = self._load_weekly_top_traders_week_key()
 
@@ -192,6 +193,7 @@ class TradeBot(discord.Client):
                 season_year=self._season_year,
                 notify_once_per_trade=self._notify_once_per_trade,
                 announce_trade_bait=self._announce_trade_bait,
+                announce_draft_picks=self._announce_draft_picks,
             )
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 429:

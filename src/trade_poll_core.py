@@ -7,6 +7,13 @@ import time
 from typing import Any
 
 import discord
+from src.draft_notify import (
+    draft_pick_embed_title,
+    draft_pick_notification_key,
+    format_draft_pick_text,
+    is_draft_pick_too_old_to_announce,
+    selected_draft_picks_from_results,
+)
 from src.mfl_client import (
     MflClient,
     accounting_balance_by_franchise,
@@ -31,6 +38,7 @@ _TRADE_EMBED_COLOR = discord.Color.dark_green().value
 _TRADE_EMBED_TITLE = "Trade"
 _TRADE_BAIT_EMBED_COLOR = discord.Color.blurple().value
 _TRADE_BAIT_EMBED_TITLE = "Trade bait update"
+_DRAFT_PICK_EMBED_COLOR = discord.Color.gold().value
 
 
 class TradeMessagePayload:
@@ -52,6 +60,7 @@ async def poll_trades_for_new_messages(
     season_year: int,
     notify_once_per_trade: bool,
     announce_trade_bait: bool,
+    announce_draft_picks: bool = True,
 ) -> tuple[list[tuple[str, TradeMessagePayload]], bool]:
     """
     Fetch league data. Mutates seen only for old-trade silent seeds.
@@ -75,6 +84,10 @@ async def poll_trades_for_new_messages(
         player_scores_json = {}
     await mfl.sleep_between_exports()
     accounting_json = await mfl.fetch_accounting()
+    draft_results_json: dict[str, Any] = {}
+    if announce_draft_picks:
+        await mfl.sleep_between_exports()
+        draft_results_json = await mfl.fetch_draft_results()
     accounting_totals = accounting_balance_by_franchise(accounting_json)
     salaries_by_franchise = player_salaries_by_franchise(rosters_json)
     contract_years_by_franchise = player_contract_years_by_franchise(rosters_json)
@@ -142,6 +155,38 @@ async def poll_trades_for_new_messages(
                 body = body[: DISCORD_DESCRIPTION_LIMIT - 3] + "..."
             out.append(
                 (key, TradeMessagePayload(_TRADE_BAIT_EMBED_TITLE, body, _TRADE_BAIT_EMBED_COLOR))
+            )
+
+    if announce_draft_picks:
+        for selection in selected_draft_picks_from_results(draft_results_json):
+            key = draft_pick_notification_key(selection, season_year)
+            if key in seen:
+                continue
+            if is_draft_pick_too_old_to_announce(
+                selection, now, announce_max_age_hours
+            ):
+                seen.add(key)
+                updated = True
+                continue
+            body = format_draft_pick_text(
+                selection,
+                franchise_names,
+                players,
+                rosters_json,
+                salaries_by_franchise,
+                points_by_player_id,
+            )
+            if len(body) > DISCORD_DESCRIPTION_LIMIT:
+                body = body[: DISCORD_DESCRIPTION_LIMIT - 3] + "..."
+            out.append(
+                (
+                    key,
+                    TradeMessagePayload(
+                        draft_pick_embed_title(selection),
+                        body,
+                        _DRAFT_PICK_EMBED_COLOR,
+                    ),
+                )
             )
 
     return out, updated
