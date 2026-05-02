@@ -84,35 +84,41 @@ def _normalize_dict_rows(raw: Any) -> list[dict[str, Any]]:
     return []
 
 
+def _all_draft_pick_rows(draft_results_json: dict[str, Any]) -> list[dict[str, Any]]:
+    draft_results = draft_results_json.get("draftResults") or {}
+    draft_units = _normalize_dict_rows(draft_results.get("draftUnit"))
+    rows: list[dict[str, Any]] = []
+    for draft_unit in draft_units:
+        rows.extend(_normalize_dict_rows(draft_unit.get("draftPick")))
+    return rows
+
+
 def selected_draft_picks_from_results(
     draft_results_json: dict[str, Any],
 ) -> list[DraftPickSelection]:
-    draft_results = draft_results_json.get("draftResults") or {}
-    draft_units = _normalize_dict_rows(draft_results.get("draftUnit"))
     selections: list[DraftPickSelection] = []
     overall_index = 0
-    for draft_unit in draft_units:
-        for draft_pick in _normalize_dict_rows(draft_unit.get("draftPick")):
-            overall_index += 1
-            player_id = str(draft_pick.get("player") or "").strip()
-            franchise_id = str(draft_pick.get("franchise") or "").strip()
-            if not player_id or not franchise_id:
-                continue
-            try:
-                round_number = int(str(draft_pick.get("round") or "").strip())
-                pick_number = int(str(draft_pick.get("pick") or "").strip())
-            except ValueError:
-                continue
-            selections.append(
-                DraftPickSelection(
-                    franchise_id=franchise_id,
-                    player_id=player_id,
-                    round_number=round_number,
-                    pick_number=pick_number,
-                    overall_index=overall_index,
-                    timestamp=str(draft_pick.get("timestamp") or "").strip(),
-                )
+    for draft_pick in _all_draft_pick_rows(draft_results_json):
+        overall_index += 1
+        player_id = str(draft_pick.get("player") or "").strip()
+        franchise_id = str(draft_pick.get("franchise") or "").strip()
+        if not player_id or not franchise_id:
+            continue
+        try:
+            round_number = int(str(draft_pick.get("round") or "").strip())
+            pick_number = int(str(draft_pick.get("pick") or "").strip())
+        except ValueError:
+            continue
+        selections.append(
+            DraftPickSelection(
+                franchise_id=franchise_id,
+                player_id=player_id,
+                round_number=round_number,
+                pick_number=pick_number,
+                overall_index=overall_index,
+                timestamp=str(draft_pick.get("timestamp") or "").strip(),
             )
+        )
     return selections
 
 
@@ -187,6 +193,30 @@ def _player_suffix(
     return f" ({' / '.join(parts)})" if parts else ""
 
 
+def next_pick_on_clock(
+    selection: DraftPickSelection,
+    draft_results_json: dict[str, Any],
+    franchise_names: dict[str, str],
+) -> tuple[str, str] | None:
+    all_rows = _all_draft_pick_rows(draft_results_json)
+    for row in all_rows[selection.overall_index :]:
+        player_id = str(row.get("player") or "").strip()
+        if player_id:
+            continue
+        franchise_id = str(row.get("franchise") or "").strip()
+        if not franchise_id:
+            continue
+        try:
+            round_number = int(str(row.get("round") or "").strip())
+            pick_number = int(str(row.get("pick") or "").strip())
+        except ValueError:
+            continue
+        slot = f"{round_number}.{pick_number:02d}"
+        team_name = franchise_names.get(franchise_id, f"Franchise {franchise_id}")
+        return (team_name, slot)
+    return None
+
+
 def _roster_player_ids_at_position(
     rosters_json: dict[str, Any],
     franchise_id: str,
@@ -212,6 +242,7 @@ def _roster_player_ids_at_position(
 def format_draft_pick_text(
     selection: DraftPickSelection,
     franchise_names: dict[str, str],
+    draft_results_json: dict[str, Any],
     players: dict[str, str],
     rosters_json: dict[str, Any],
     salaries_by_franchise: dict[str, dict[str, str]],
@@ -251,11 +282,22 @@ def format_draft_pick_text(
     if not room_lines:
         room_lines.append("* (no matching rostered players found)")
 
+    next_pick = next_pick_on_clock(selection, draft_results_json, franchise_names)
+    if next_pick is None:
+        next_on_clock_line = "Next on the clock: (draft complete)"
+    else:
+        next_team_name, next_slot = next_pick
+        next_on_clock_line = (
+            f"Next on the clock is {next_team_name}\n"
+            f"at {next_slot}"
+        )
+
     return "\n\n".join(
         [
             quote,
             f"{team_name} selects **{drafted_player}** at {selection.slot}.",
             f"{_possessive(team_name)} newest room of {room_label} is now:\n\n"
             + "\n".join(room_lines),
+            next_on_clock_line,
         ]
     )

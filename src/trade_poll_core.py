@@ -171,6 +171,7 @@ async def poll_trades_for_new_messages(
             body = format_draft_pick_text(
                 selection,
                 franchise_names,
+                draft_results_json,
                 players,
                 rosters_json,
                 salaries_by_franchise,
