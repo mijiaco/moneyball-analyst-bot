@@ -189,6 +189,7 @@ async def _async_main() -> int:
     announce_pending = env_bool("MFL_ANNOUNCE_PENDING_TRADES", True)
     notify_once_per_trade = env_bool("MFL_NOTIFY_ONCE_PER_TRADE", True)
     announce_trade_bait = env_bool("MFL_ANNOUNCE_TRADE_BAIT", True)
+    announce_draft_picks = env_bool("MFL_ANNOUNCE_DRAFT_PICKS", True)
     weekly_reports_enabled = env_bool("MFL_WEEKLY_REPORTS_ENABLED", True)
     weekly_reports_include_draft_picks = env_bool(
         "MFL_WEEKLY_REPORTS_INCLUDE_DRAFT_PICKS", True
@@ -229,6 +230,7 @@ async def _async_main() -> int:
             season_year=season_year,
             notify_once_per_trade=notify_once_per_trade,
             announce_trade_bait=announce_trade_bait,
+            announce_draft_picks=announce_draft_picks,
         )
         weekly_report_payloads: list[tuple[str, str, int]] = []
         if weekly_reports_enabled:
