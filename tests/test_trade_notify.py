@@ -11,6 +11,7 @@ from src.draft_notify import (
     draft_pick_notification_key,
     format_draft_pick_text,
     is_draft_pick_too_old_to_announce,
+    rookie_salary_by_slot,
     selected_draft_picks_from_results,
 )
 from src.mfl_client import (
@@ -302,13 +303,44 @@ def test_format_draft_pick_text_includes_position_room_sorted_with_salary_points
     assert text.startswith("The consensus big boards were right on this one!")
     assert "Lone Star Lambs selects **Love, Jeremiyah ARI RB** at 1.01." in text
     assert "Lone Star Lambs' newest room of RBs is now:" in text
-    assert "* **Love, Jeremiyah ARI RB**" in text
+    assert "* **Love, Jeremiyah ARI RB** ($50)" in text
     assert "* Robinson, Brian ATL RB ($34 / 87.9 pts)" in text
     assert "* Tracy, Tyrone NYG RB ($35 / 169.9 pts)" in text
     assert text.index("Love, Jeremiyah") < text.index("Robinson, Brian")
     assert text.index("Robinson, Brian") < text.index("Tracy, Tyrone")
     assert "Bowers" not in text
     assert "Next on the clock is Franchise 0010\nat 1.02" in text
+
+
+def test_rookie_salary_by_slot_mapping() -> None:
+    def _selection(round_number: int, pick_number: int) -> dict:
+        return {
+            "draftResults": {
+                "draftUnit": {
+                    "draftPick": {
+                        "franchise": "0017",
+                        "player": "17001",
+                        "round": str(round_number),
+                        "pick": str(pick_number),
+                        "timestamp": "1775583753",
+                    }
+                }
+            }
+        }
+
+    assert rookie_salary_by_slot(selected_draft_picks_from_results(_selection(1, 1))[0]) == 50
+    assert rookie_salary_by_slot(selected_draft_picks_from_results(_selection(1, 2))[0]) == 45
+    assert rookie_salary_by_slot(selected_draft_picks_from_results(_selection(1, 5))[0]) == 40
+    assert rookie_salary_by_slot(selected_draft_picks_from_results(_selection(1, 8))[0]) == 35
+    assert rookie_salary_by_slot(selected_draft_picks_from_results(_selection(1, 11))[0]) == 30
+    assert rookie_salary_by_slot(selected_draft_picks_from_results(_selection(1, 20))[0]) == 20
+    assert rookie_salary_by_slot(selected_draft_picks_from_results(_selection(1, 30))[0]) == 15
+    assert rookie_salary_by_slot(selected_draft_picks_from_results(_selection(2, 10))[0]) == 10
+    assert rookie_salary_by_slot(selected_draft_picks_from_results(_selection(2, 20))[0]) == 7
+    assert rookie_salary_by_slot(selected_draft_picks_from_results(_selection(3, 1))[0]) == 5
+    assert rookie_salary_by_slot(selected_draft_picks_from_results(_selection(4, 1))[0]) == 3
+    assert rookie_salary_by_slot(selected_draft_picks_from_results(_selection(5, 1))[0]) == 2
+    assert rookie_salary_by_slot(selected_draft_picks_from_results(_selection(6, 1))[0]) == 1
 
 
 def test_trade_bait_age_gate() -> None:

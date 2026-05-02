@@ -193,6 +193,36 @@ def _player_suffix(
     return f" ({' / '.join(parts)})" if parts else ""
 
 
+def rookie_salary_by_slot(selection: DraftPickSelection) -> int:
+    round_number = selection.round_number
+    pick_number = selection.pick_number
+    if round_number == 1:
+        if pick_number == 1:
+            return 50
+        if 2 <= pick_number <= 3:
+            return 45
+        if 4 <= pick_number <= 6:
+            return 40
+        if 7 <= pick_number <= 9:
+            return 35
+        if 10 <= pick_number <= 16:
+            return 30
+        if 17 <= pick_number <= 24:
+            return 20
+        return 15
+    if round_number == 2:
+        if pick_number <= 16:
+            return 10
+        return 7
+    if round_number == 3:
+        return 5
+    if round_number == 4:
+        return 3
+    if round_number == 5:
+        return 2
+    return 1
+
+
 def next_pick_on_clock(
     selection: DraftPickSelection,
     draft_results_json: dict[str, Any],
@@ -269,15 +299,20 @@ def format_draft_pick_text(
     room_lines: list[str] = []
     for player_id in room_player_ids:
         player_label = players.get(player_id, f"Player id {player_id}")
-        suffix = _player_suffix(
-            player_id,
-            selection.franchise_id,
-            salaries_by_franchise,
-            points_by_player_id,
-        )
         if player_id == selection.player_id:
-            room_lines.append(f"* **{player_label}**{suffix}")
+            rookie_salary = rookie_salary_by_slot(selection)
+            rookie_parts = [f"${rookie_salary}"]
+            rookie_points = points_by_player_id.get(player_id)
+            if rookie_points is not None:
+                rookie_parts.append(_format_points(rookie_points))
+            room_lines.append(f"* **{player_label}** ({' / '.join(rookie_parts)})")
         else:
+            suffix = _player_suffix(
+                player_id,
+                selection.franchise_id,
+                salaries_by_franchise,
+                points_by_player_id,
+            )
             room_lines.append(f"* {player_label}{suffix}")
     if not room_lines:
         room_lines.append("* (no matching rostered players found)")
