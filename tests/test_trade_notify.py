@@ -246,21 +246,29 @@ def test_draft_pick_age_gate() -> None:
 
 
 def test_format_draft_pick_text_includes_position_room_sorted_with_salary_points() -> None:
-    selection = selected_draft_picks_from_results(
-        {
-            "draftResults": {
-                "draftUnit": {
-                    "draftPick": {
+    draft_results = {
+        "draftResults": {
+            "draftUnit": {
+                "draftPick": [
+                    {
                         "franchise": "0017",
                         "player": "17001",
                         "round": "01",
                         "pick": "01",
                         "timestamp": "1775583753",
-                    }
-                }
+                    },
+                    {
+                        "franchise": "0010",
+                        "player": "",
+                        "round": "01",
+                        "pick": "02",
+                        "timestamp": "",
+                    },
+                ]
             }
         }
-    )[0]
+    }
+    selection = selected_draft_picks_from_results(draft_results)[0]
     franchises = {"0017": "Lone Star Lambs"}
     players = {
         "17001": "Love, Jeremiyah ARI RB",
@@ -285,6 +293,7 @@ def test_format_draft_pick_text_includes_position_room_sorted_with_salary_points
     text = format_draft_pick_text(
         selection,
         franchises,
+        draft_results,
         players,
         rosters_json,
         salaries,
@@ -299,6 +308,7 @@ def test_format_draft_pick_text_includes_position_room_sorted_with_salary_points
     assert text.index("Love, Jeremiyah") < text.index("Robinson, Brian")
     assert text.index("Robinson, Brian") < text.index("Tracy, Tyrone")
     assert "Bowers" not in text
+    assert "Next on the clock is Franchise 0010\nat 1.02" in text
 
 
 def test_trade_bait_age_gate() -> None:
