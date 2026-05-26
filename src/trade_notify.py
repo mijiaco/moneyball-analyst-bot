@@ -835,7 +835,7 @@ def format_draft_picks_report_text(
     current_year_picks_by_franchise: dict[str, list[str]],
     future_year_picks_by_franchise: dict[str, list[str]],
     *,
-    title: str = "Draft Picks Report (Current + Future)",
+    title: str = "Draft Picks Report (Future)",
     report_season_year: int | None = None,
 ) -> str:
     team_ids = set(franchise_names.keys())
@@ -852,15 +852,8 @@ def format_draft_picks_report_text(
     lines = [title, ""]
     for franchise_id in sorted_team_ids:
         team_name = franchise_names.get(franchise_id, f"Franchise {franchise_id}")
-        current_lines = current_year_picks_by_franchise.get(franchise_id, [])
         future_lines = future_year_picks_by_franchise.get(franchise_id, [])
         lines.append(f"{team_name}")
-        lines.extend(
-            _format_compact_current_picks(
-                current_lines,
-                report_season_year=report_season_year,
-            )
-        )
         lines.extend(_format_compact_future_picks(future_lines))
         lines.append("")
 
@@ -1558,9 +1551,9 @@ async def post_draft_picks_embeds_to_discord() -> int:
     total = len(chunks)
     color = 5793266
     for index, chunk in enumerate(chunks, start=1):
-        title = "Draft Picks Report (Current + Future)"
+        title = "Draft Picks Report (Future)"
         if total > 1:
-            title = f"Draft Picks Report (Current + Future) ({index}/{total})"
+            title = f"Draft Picks Report (Future) ({index}/{total})"
         description = f"{as_of_line}\n\n{chunk}"
         if len(description) > 4096:
             description = description[:4093] + "..."
@@ -1713,7 +1706,7 @@ def main() -> None:
     parser.add_argument(
         "--draft-picks-report",
         action="store_true",
-        help="With --dry-run, print each franchise's current and future draft picks.",
+        help="With --dry-run, print each franchise's future draft picks.",
     )
     parser.add_argument(
         "--cap-space-report",
