@@ -28,6 +28,7 @@ from src.mfl_env import (
     mfl_connect_settings,
 )
 from src.trade_notify import (
+    cap_space_available_by_franchise,
     current_season_lookback_days,
     env_bool,
     format_draft_picks_report_text,
@@ -278,10 +279,10 @@ async def _async_main() -> int:
                         draft_chunks = _chunk_text_by_sections(draft_report_text, max_len=3900)
                         total_chunks = len(draft_chunks)
                         for index, chunk in enumerate(draft_chunks, start=1):
-                            chunk_title = "Draft Picks Report (Current + Future)"
+                            chunk_title = "Draft Picks Report (Future)"
                             if total_chunks > 1:
                                 chunk_title = (
-                                    "Draft Picks Report (Current + Future) "
+                                    "Draft Picks Report (Future) "
                                     f"({index}/{total_chunks})"
                                 )
                             chunk_with_as_of = f"{as_of_line}\n\n{chunk}"
@@ -295,6 +296,9 @@ async def _async_main() -> int:
                         roster_report = format_roster_breakdown_report_text(
                             franchise_names,
                             roster_slot_counts_by_franchise(rosters_json),
+                            cap_available_by_franchise=cap_space_available_by_franchise(
+                                league_json
+                            ),
                         )
                         roster_description = (
                             f"{as_of_line}\n\n"
@@ -306,7 +310,7 @@ async def _async_main() -> int:
                         )
                         weekly_report_payloads.append(
                             (
-                                "Players by Team (Active / Taxi / IR)",
+                                "Players by Team (Active / Taxi / IR / $ Cap Remain)",
                                 roster_description,
                                 3447003,
                             )
