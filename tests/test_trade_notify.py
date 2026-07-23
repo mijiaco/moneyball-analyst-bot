@@ -814,11 +814,10 @@ def test_format_draft_picks_report_text_compact_two_franchises() -> None:
         report_season_year=2026,
     )
     assert "Harley Quinn and the Gotham City Sirens" in text
-    assert "* 2026 Picks: 1.02, 5.17, 5.25, 6.12, 6.26" in text
+    assert "* 2026 Picks:" not in text
     assert "* Current picks: None" not in text
     assert "* 2027 Picks: 6 (Harley Quinn and the Gotham City Sirens)" in text
     assert "Plato's Academy" in text
-    assert "* 2026 Picks: 1.01, 2.05" in text
     assert "* 2027 Picks: 2 (Stripes and Scales)" in text
     # Alphabetical by team name: Harley before Plato
     assert text.index("Harley") < text.index("Plato")

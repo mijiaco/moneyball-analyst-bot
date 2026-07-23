@@ -866,20 +866,9 @@ def format_draft_picks_report_text(
     lines = [title, ""]
     for franchise_id in sorted_team_ids:
         team_name = franchise_names.get(franchise_id, f"Franchise {franchise_id}")
-        current_lines = current_year_picks_by_franchise.get(franchise_id, [])
         future_lines = future_year_picks_by_franchise.get(franchise_id, [])
         lines.append(f"{team_name}")
-        if current_lines:
-            lines.extend(
-                _format_compact_current_picks(
-                    current_lines,
-                    report_season_year=report_season_year,
-                )
-            )
-        if future_lines:
-            lines.extend(_format_compact_future_picks(future_lines))
-        elif not current_lines:
-            lines.extend(_format_compact_future_picks([]))
+        lines.extend(_format_compact_future_picks(future_lines))
         lines.append("")
 
     return "\n".join(lines).rstrip()
