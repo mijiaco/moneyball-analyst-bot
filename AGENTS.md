@@ -6,7 +6,9 @@ Instructions for AI assistants and developers working in this repository.
 
 - Polls a **MyFantasyLeague (MFL)** league via JSON **export** HTTP APIs.
 - Posts **Discord** messages (embeds) for **trades** and optional **trade bait** updates.
-- Persists **dedupe state** in `data/seen_trades.json` (and optional weekly report cursor in `data/reports_state.json`) so repeats are not announced.
+- Posts optional **Restricted Free Agent (RFA)** report embeds (list changes + Saturday weekly) and **invalid RFA claim** alerts; syncs the active RFA list to Google Sheets.
+- Posts optional Saturday weekly embeds (Top Traders, draft picks, roster breakdown, **roster violations**).
+- Persists **dedupe state** in `data/seen_trades.json`, optional weekly report cursor in `data/reports_state.json`, and RFA state in `data/rfa_state.json` so repeats are not announced.
 - **Primary runtime:** GitHub Actions workflow `scheduled-export` running `python -m src.run_once` (no long-lived server required).
 - **Optional:** `python -m src.bot` is a Discord gateway client for local/long-poll use; the maintainer typically relies on Actions instead.
 
@@ -23,9 +25,14 @@ Do **not** commit secrets, `.env`, or API keys. Never overwrite `.env` without e
 | `src/trade_notify.py` | Fingerprints, formatting, dry-run CLI (`python -m src.trade_notify`). |
 | `src/mfl_client.py` | Async HTTP client for `…/export` endpoints; players cache; **`INCLUDE_DRAFT_PICKS`** on trade bait fetch so `willGiveUp` includes `DP_` / `FP_` tokens. |
 | `src/mfl_env.py` | Requires `MFL_HOST`, `MFL_YEAR`, `MFL_LEAGUE_ID` from env (no baked-in league defaults). |
+| `src/rfa_state.py` | RFA roster-diff state machine; FREE_AGENT / BBID_WAIVER parsers. |
+| `src/rfa_report.py` | RFA Discord formatters (and re-exports from `rfa_state`). |
+| `src/roster_violations.py` | IR eligibility, roster/taxi/IR slot limits, salary cap, and starter-depth violation detection/formatting. |
+| `src/google_sheets.py` | Service-account Sheets read (top 32) + write (RFA tab). |
 | `src/bot.py` | Optional Discord.py bot. |
 | `.github/workflows/scheduled-export.yml` | Actions workflow: dispatch-only triggers, env wiring, Contents API commit for state files. |
 | `tests/test_trade_notify.py` | Unit tests (no network). |
+| `tests/test_rfa_report.py` | RFA unit tests (no network). |
 
 ---
 
@@ -49,11 +56,26 @@ Resolved in `src/mfl_env.py`.
 - `MFL_API_KEY` — optional in theory but required for private leagues / Actions `Require` step
 - `MFL_USER_AGENT` — optional; sent as `User-Agent` when set
 
+### Google Sheets (RFA report)
+
+- `GOOGLE_SERVICE_ACCOUNT_JSON` — service account JSON string **or** path to a JSON file
+- `GOOGLE_SERVICE_ACCOUNT_FILE` — alternate path to the JSON file
+- `GOOGLE_SHEETS_SPREADSHEET_ID` — spreadsheet id (defaults to the league RFA workbook id in code)
+- `GOOGLE_SHEETS_TOP32_TAB` — eligibility tab (default `Top 32 At Position`)
+- `GOOGLE_SHEETS_RFA_TAB` — output tab (default `Restricted Free Agents`)
+
+Share the spreadsheet with the service account email (Editor).
+
 ### Common optional toggles (defaults exist in code)
 
 - `MFL_TRADE_LOOKBACK_DAYS`
 - `MFL_ANNOUNCE_MAX_AGE_HOURS` — blank/unset in Actions → treated as `48` in `run_once`
 - `MFL_ANNOUNCE_PENDING_TRADES`, `MFL_NOTIFY_ONCE_PER_TRADE`, `MFL_ANNOUNCE_TRADE_BAIT` — boolean-style env (see `env_bool` in `trade_notify.py`)
+- `MFL_RFA_REPORT_ENABLED` — default true
+- `MFL_RFA_INVALID_CLAIM_ALERTS_ENABLED` — default true
+- `MFL_RFA_LOOKBACK_DAYS` — defaults to `MFL_TRADE_LOOKBACK_DAYS`
+- `MFL_WEEKLY_REPORTS_INCLUDE_ROSTER_VIOLATIONS` — default true (Saturday weekly batch)
+- `MFL_IR_ELIGIBLE_STATUSES` — comma/pipe list of NFL injury statuses allowed on IR (default: IR/Out/Doubtful + Suspended/Holdout/Retired/etc.; Questionable excluded)
 
 Local: use a `.env` file (loaded by `python-dotenv` where used). **`.env` is gitignored.**
 
@@ -84,6 +106,7 @@ Required by the workflow’s guard step:
 Also passed when set:
 
 - `MFL_USER_AGENT`
+- `GOOGLE_SERVICE_ACCOUNT_JSON` — required for RFA sheet read/write
 
 ### Variables (repository)
 
@@ -96,6 +119,9 @@ Required by the workflow’s guard step:
 Optional:
 
 - `MFL_ANNOUNCE_MAX_AGE_HOURS`
+- `GOOGLE_SHEETS_SPREADSHEET_ID`
+- `GOOGLE_SHEETS_TOP32_TAB`
+- `GOOGLE_SHEETS_RFA_TAB`
 
 ### Concurrency
 
@@ -107,6 +133,7 @@ The workflow uses `actions/github-script` to commit, via the Contents API (with 
 
 - `data/seen_trades.json`
 - `data/reports_state.json` (if present)
+- `data/rfa_state.json` (if present)
 
 So each **clone** of this repo on GitHub has **its own** dedupe history unless you share or sync files manually.
 
@@ -167,6 +194,12 @@ python3 -m src.bot                   # optional; needs env
 3. **Dedupe / duplicate announcements** — fingerprinting lives in `trade_notify.py`; `seen_trades.json` keys must stay stable across pending/processed (do not key solely on MFL transaction id for dedupe).
 
 4. **Discord custom text** — not implemented in-repo; use Discord API `POST /channels/{id}/messages` with `{"content":"..."}` and `Authorization: Bot <token>` for one-offs.
+
+5. **RFA list empty / skipped** — confirm Sheets service account can read tab `top 32 by position`, and that rows include MFL player ids or unambiguous player names. Without credentials, RFA is skipped (trades still run).
+
+6. **Invalid RFA claim alerts** — triggered when an RFA player is claimed with winning bid / new roster salary below last cut salary (`BBID_WAIVER` bid when present, else roster salary after add).
+
+7. **Roster violations / injuries** — `TYPE=injuries` must use **`api.myfantasyleague.com`** (league host returns an error). IR eligibility defaults exclude Questionable; override with `MFL_IR_ELIGIBLE_STATUSES` if the league’s IR setup is broader/narrower. Salary-cap checks use `leagueStandings.salary` vs franchise `salaryCapAmount`. Starting-roster checks compare active (non-IR/taxi) depth to `league.starters` minimums.
 
 ---
 

@@ -747,6 +747,28 @@ def test_draft_picks_by_franchise_parses_current_and_future() -> None:
     assert future_map["0001"] == ["Year 2027 Round 2 from Team B"]
 
 
+def test_future_draft_picks_by_franchise_from_export() -> None:
+    from src.mfl_client import future_draft_picks_by_franchise_from_export
+
+    export_json = {
+        "futureDraftPicks": {
+            "franchise": {
+                "id": "0003",
+                "futureDraftPick": [
+                    {"year": "2027", "round": "2", "originalPickFor": "0026"},
+                    {"year": "2027", "round": "5", "originalPickFor": "0022"},
+                ],
+            }
+        }
+    }
+    names = {"0003": "Team C", "0026": "Team Z", "0022": "Team Y"}
+    future_map = future_draft_picks_by_franchise_from_export(export_json, names)
+    assert future_map["0003"] == [
+        "Year 2027 Round 2 Draft Pick from Team Z",
+        "Year 2027 Round 5 Draft Pick from Team Y",
+    ]
+
+
 def test_format_draft_picks_report_text_renders_sections() -> None:
     franchise_names = {"0001": "Team A"}
     current_map = {"0001": ["Round 1.01"]}
@@ -792,10 +814,11 @@ def test_format_draft_picks_report_text_compact_two_franchises() -> None:
         report_season_year=2026,
     )
     assert "Harley Quinn and the Gotham City Sirens" in text
-    assert "* 2026 Picks:" not in text
+    assert "* 2026 Picks: 1.02, 5.17, 5.25, 6.12, 6.26" in text
     assert "* Current picks: None" not in text
     assert "* 2027 Picks: 6 (Harley Quinn and the Gotham City Sirens)" in text
     assert "Plato's Academy" in text
+    assert "* 2026 Picks: 1.01, 2.05" in text
     assert "* 2027 Picks: 2 (Stripes and Scales)" in text
     # Alphabetical by team name: Harley before Plato
     assert text.index("Harley") < text.index("Plato")

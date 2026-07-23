@@ -37,6 +37,10 @@ jobs:
       MFL_YEAR: ${{ vars.MFL_YEAR }}
       MFL_LEAGUE_ID: ${{ vars.MFL_LEAGUE_ID }}
       MFL_ANNOUNCE_MAX_AGE_HOURS: ${{ vars.MFL_ANNOUNCE_MAX_AGE_HOURS }}
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+      GOOGLE_SHEETS_SPREADSHEET_ID: ${{ vars.GOOGLE_SHEETS_SPREADSHEET_ID }}
+      GOOGLE_SHEETS_TOP32_TAB: ${{ vars.GOOGLE_SHEETS_TOP32_TAB }}
+      GOOGLE_SHEETS_RFA_TAB: ${{ vars.GOOGLE_SHEETS_RFA_TAB }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -81,7 +85,7 @@ jobs:
             const { owner, repo } = context.repo;
             const branch = context.ref.replace("refs/heads/", "");
 
-            const filePaths = ["data/seen_trades.json", "data/reports_state.json"];
+            const filePaths = ["data/seen_trades.json", "data/reports_state.json", "data/rfa_state.json"];
 
             for (const filePath of filePaths) {
               if (!fs.existsSync(filePath)) {

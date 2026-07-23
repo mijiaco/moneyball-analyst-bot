@@ -21,11 +21,43 @@ from src.mfl_client import (
     accounting_balance_by_franchise,
     draft_picks_by_franchise,
     franchise_names_from_league,
+    player_salaries_by_franchise,
 )
 from src.mfl_env import (
     missing_mfl_connect_env_names,
     mfl_connect_env_help_suffix,
     mfl_connect_settings,
+)
+from src.google_sheets import fetch_top32_player_ids, sync_rfa_sheet
+from src.rfa_report import (
+    INVALID_RFA_CLAIM_COLOR,
+    INVALID_RFA_CLAIM_TITLE,
+    RFA_REPORT_COLOR,
+    RFA_REPORT_TITLE,
+    format_invalid_rfa_claim_text,
+    format_rfa_report_text,
+    invalid_claim_fingerprint,
+    load_rfa_state,
+    parse_bbid_waiver_claims,
+    parse_free_agent_moves,
+    save_rfa_state,
+    update_rfa_state,
+)
+from src.roster_violations import (
+    ROSTER_VIOLATIONS_COLOR,
+    ROSTER_VIOLATIONS_TITLE,
+    find_ir_eligibility_violations,
+    find_salary_cap_violations,
+    find_slot_limit_violations,
+    find_starter_requirement_violations,
+    format_roster_violations_report_text,
+    franchise_salaries_from_standings,
+    franchise_salary_caps_from_league,
+    injury_status_by_player_id,
+    ir_eligible_statuses_from_env,
+    league_slot_limits,
+    starter_lineup_size,
+    starter_position_minimums,
 )
 from src.trade_notify import (
     cap_space_available_by_franchise,
@@ -41,7 +73,7 @@ from src.trade_notify import (
     top_trader_counts,
     traded_own_future_pick_rounds_by_franchise,
 )
-from src.trade_poll_core import poll_trades_for_new_messages
+from src.trade_poll_core import TradeMessagePayload, poll_trades_for_new_messages
 
 logger = logging.getLogger(__name__)
 
@@ -118,10 +150,8 @@ def _current_week_key_et(now_et: datetime) -> str:
 
 
 def _is_weekly_reports_due(now_et: datetime) -> bool:
-    # Saturday at/after 3:30 PM Eastern Time
-    return now_et.weekday() == 5 and (
-        now_et.hour > 15 or (now_et.hour == 15 and now_et.minute >= 30)
-    )
+    # Saturday at/after 3:00 PM Eastern Time
+    return now_et.weekday() == 5 and now_et.hour >= 15
 
 
 def _is_sunday_unpaid_report_due(now_et: datetime) -> bool:
@@ -182,6 +212,7 @@ async def _async_main() -> int:
     seen_path = data_dir / "seen_trades.json"
     players_cache = data_dir / "players_cache.json"
     reports_state_path = _weekly_reports_state_path(data_dir)
+    rfa_state_path = data_dir / "rfa_state.json"
     seen = load_seen(seen_path)
 
     lookback = int(os.environ.get("MFL_TRADE_LOOKBACK_DAYS", "14"))
@@ -198,7 +229,15 @@ async def _async_main() -> int:
     weekly_reports_include_roster_breakdown = env_bool(
         "MFL_WEEKLY_REPORTS_INCLUDE_ROSTER_BREAKDOWN", True
     )
+    weekly_reports_include_roster_violations = env_bool(
+        "MFL_WEEKLY_REPORTS_INCLUDE_ROSTER_VIOLATIONS", True
+    )
     sunday_unpaid_report_enabled = env_bool("MFL_SUNDAY_UNPAID_REPORT_ENABLED", True)
+    rfa_report_enabled = env_bool("MFL_RFA_REPORT_ENABLED", True)
+    rfa_invalid_claim_alerts_enabled = env_bool(
+        "MFL_RFA_INVALID_CLAIM_ALERTS_ENABLED", True
+    )
+    rfa_lookback_days = int(os.environ.get("MFL_RFA_LOOKBACK_DAYS", str(lookback)))
 
     connect = mfl_connect_settings()
     if connect is None:
@@ -221,6 +260,7 @@ async def _async_main() -> int:
         players_cache_path=players_cache,
     )
     updated_reports_state = False
+    updated_rfa_state = False
     try:
         pending_posts, updated = await poll_trades_for_new_messages(
             mfl,
@@ -290,9 +330,16 @@ async def _async_main() -> int:
                                 (chunk_title, chunk_with_as_of, 5793266)
                             )
 
-                    if weekly_reports_include_roster_breakdown:
+                    rosters_json: dict[str, Any] | None = None
+                    if (
+                        weekly_reports_include_roster_breakdown
+                        or weekly_reports_include_roster_violations
+                    ):
                         await mfl.sleep_between_exports()
                         rosters_json = await mfl.fetch_rosters()
+
+                    if weekly_reports_include_roster_breakdown:
+                        assert rosters_json is not None
                         roster_report = format_roster_breakdown_report_text(
                             franchise_names,
                             roster_slot_counts_by_franchise(rosters_json),
@@ -316,19 +363,65 @@ async def _async_main() -> int:
                             )
                         )
 
+                    if weekly_reports_include_roster_violations:
+                        assert rosters_json is not None
+                        await mfl.sleep_between_exports()
+                        injuries_json = await mfl.fetch_injuries()
+                        await mfl.sleep_between_exports()
+                        standings_json = await mfl.fetch_league_standings()
+                        await mfl.sleep_between_exports()
+                        players_map = await mfl.get_players_map()
+                        slot_limits = league_slot_limits(league_json)
+                        violations_report = format_roster_violations_report_text(
+                            franchise_names,
+                            find_ir_eligibility_violations(
+                                rosters_json,
+                                injury_status_by_player_id(injuries_json),
+                                players_map,
+                                eligible_statuses=ir_eligible_statuses_from_env(),
+                            ),
+                            find_slot_limit_violations(
+                                rosters_json,
+                                roster_limit=slot_limits["roster"],
+                                taxi_limit=slot_limits["taxi"],
+                                ir_limit=slot_limits["ir"],
+                            ),
+                            salary_cap_violations=find_salary_cap_violations(
+                                franchise_salaries_from_standings(standings_json),
+                                franchise_salary_caps_from_league(league_json),
+                            ),
+                            starter_requirement_violations=find_starter_requirement_violations(
+                                rosters_json,
+                                players_map,
+                                position_minimums=starter_position_minimums(league_json),
+                                lineup_size=starter_lineup_size(league_json),
+                            ),
+                        )
+                        violations_description = (
+                            f"{as_of_line}\n\n"
+                            + (
+                                violations_report.split("\n\n", 1)[1]
+                                if "\n\n" in violations_report
+                                else violations_report
+                            )
+                        )
+                        weekly_report_payloads.append(
+                            (
+                                ROSTER_VIOLATIONS_TITLE,
+                                violations_description,
+                                ROSTER_VIOLATIONS_COLOR,
+                            )
+                        )
+
                     for report_title, report_description, report_color in weekly_report_payloads:
                         pending_posts.append(
                             (
                                 f"WEEKLY_REPORT|{current_week_key}|{report_title}",
-                                type(
-                                    "Payload",
-                                    (),
-                                    {
-                                        "title": report_title,
-                                        "description": report_description,
-                                        "color": report_color,
-                                    },
-                                )(),
+                                TradeMessagePayload(
+                                    report_title,
+                                    report_description,
+                                    report_color,
+                                ),
                             )
                         )
                     _save_last_weekly_reports_week_key(reports_state_path, current_week_key)
@@ -377,20 +470,113 @@ async def _async_main() -> int:
                     pending_posts.append(
                         (
                             f"SUNDAY_UNPAID|{today_et}",
-                            type(
-                                "Payload",
-                                (),
-                                {
-                                    "title": "Unpaid Owners / Traded Picks",
-                                    "description": description,
-                                    "color": 15105570,
-                                },
-                            )(),
+                            TradeMessagePayload(
+                                "Unpaid Owners / Traded Picks",
+                                description,
+                                15105570,
+                            ),
                         )
                     )
                     reports_state["last_unpaid_owners_sunday_date_et"] = today_et
                     _write_reports_state_json(reports_state_path, reports_state)
                     updated_reports_state = True
+
+        if rfa_report_enabled:
+            now_rfa = datetime.now(ZoneInfo("America/New_York"))
+            as_of_rfa = f"As of {_as_of_label_et(now_rfa)}"
+            rfa_state = load_rfa_state(rfa_state_path)
+            await mfl.sleep_between_exports()
+            players = await mfl.get_players_map()
+            top32_ids = fetch_top32_player_ids(players)
+            if top32_ids is None:
+                logger.warning("RFA report skipped: could not load top-32 players from Sheets")
+            else:
+                await mfl.sleep_between_exports()
+                league_json = await mfl.fetch_league()
+                franchise_names = franchise_names_from_league(league_json)
+                await mfl.sleep_between_exports()
+                rosters_json = await mfl.fetch_rosters()
+                salaries = player_salaries_by_franchise(rosters_json)
+                await mfl.sleep_between_exports()
+                fa_txs = await mfl.fetch_transactions_by_type(
+                    "FREE_AGENT",
+                    days=rfa_lookback_days,
+                )
+                await mfl.sleep_between_exports()
+                bbid_txs = await mfl.fetch_transactions_by_type(
+                    "BBID_WAIVER",
+                    days=rfa_lookback_days,
+                )
+                fa_moves = parse_free_agent_moves(fa_txs)
+                bbid_claims = parse_bbid_waiver_claims(bbid_txs)
+                updated_state, invalid_claims, list_changed = update_rfa_state(
+                    rfa_state,
+                    top32_player_ids=top32_ids,
+                    current_salaries_by_franchise=salaries,
+                    franchise_names=franchise_names,
+                    free_agent_moves=fa_moves,
+                    bbid_claims=bbid_claims,
+                )
+
+                should_post_weekly = False
+                if _is_weekly_reports_due(now_rfa):
+                    week_key = _current_week_key_et(now_rfa)
+                    if week_key != str(updated_state.get("last_rfa_weekly_week_key") or ""):
+                        should_post_weekly = True
+                        updated_state["last_rfa_weekly_week_key"] = week_key
+
+                should_post_report = list_changed or should_post_weekly
+                if should_post_report:
+                    report_text = format_rfa_report_text(
+                        updated_state.get("active_rfas") or {},
+                        players,
+                        as_of_line=as_of_rfa,
+                    )
+                    if len(report_text) > 4096:
+                        report_text = report_text[:4093] + "..."
+                    dedupe_suffix = (
+                        f"WEEKLY|{updated_state.get('last_rfa_weekly_week_key')}"
+                        if should_post_weekly and not list_changed
+                        else f"CHANGE|{updated_state.get('list_fingerprint')}"
+                    )
+                    report_key = f"RFA_REPORT|{dedupe_suffix}"
+                    if report_key not in seen:
+                        pending_posts.append(
+                            (
+                                report_key,
+                                TradeMessagePayload(
+                                    RFA_REPORT_TITLE,
+                                    report_text,
+                                    RFA_REPORT_COLOR,
+                                ),
+                            )
+                        )
+                    try:
+                        sync_rfa_sheet(updated_state.get("active_rfas") or {}, players)
+                    except Exception:
+                        logger.exception("Failed syncing RFA Google Sheet")
+
+                if rfa_invalid_claim_alerts_enabled:
+                    for claim in invalid_claims:
+                        key = invalid_claim_fingerprint(claim)
+                        if key in seen:
+                            continue
+                        description = format_invalid_rfa_claim_text(
+                            claim, players, franchise_names
+                        )
+                        pending_posts.append(
+                            (
+                                key,
+                                TradeMessagePayload(
+                                    INVALID_RFA_CLAIM_TITLE,
+                                    description,
+                                    INVALID_RFA_CLAIM_COLOR,
+                                ),
+                            )
+                        )
+
+                save_rfa_state(rfa_state_path, updated_state)
+                updated_rfa_state = True
     except httpx.HTTPStatusError as exc:
         logger.exception("Upstream HTTP error: %s", exc)
         return 1
@@ -424,6 +610,8 @@ async def _async_main() -> int:
         logger.info("Updated dedupe state (%s keys)", len(seen))
     if updated_reports_state:
         logger.info("Updated weekly reports state")
+    if updated_rfa_state:
+        logger.info("Updated RFA report state")
     return 0
 
 

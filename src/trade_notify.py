@@ -35,6 +35,20 @@ from src.mfl_env import (
     mfl_connect_env_help_suffix,
     mfl_connect_settings,
 )
+from src.roster_violations import (
+    find_ir_eligibility_violations,
+    find_salary_cap_violations,
+    find_slot_limit_violations,
+    find_starter_requirement_violations,
+    format_roster_violations_report_text,
+    franchise_salaries_from_standings,
+    franchise_salary_caps_from_league,
+    injury_status_by_player_id,
+    ir_eligible_statuses_from_env,
+    league_slot_limits,
+    starter_lineup_size,
+    starter_position_minimums,
+)
 
 TRADE_COMMENTARY_LINES: tuple[str, ...] = (
     "What a trade! Just got off the phone with my sources, and this one has the league buzzing.",
@@ -852,9 +866,20 @@ def format_draft_picks_report_text(
     lines = [title, ""]
     for franchise_id in sorted_team_ids:
         team_name = franchise_names.get(franchise_id, f"Franchise {franchise_id}")
+        current_lines = current_year_picks_by_franchise.get(franchise_id, [])
         future_lines = future_year_picks_by_franchise.get(franchise_id, [])
         lines.append(f"{team_name}")
-        lines.extend(_format_compact_future_picks(future_lines))
+        if current_lines:
+            lines.extend(
+                _format_compact_current_picks(
+                    current_lines,
+                    report_season_year=report_season_year,
+                )
+            )
+        if future_lines:
+            lines.extend(_format_compact_future_picks(future_lines))
+        elif not current_lines:
+            lines.extend(_format_compact_future_picks([]))
         lines.append("")
 
     return "\n".join(lines).rstrip()
@@ -1121,6 +1146,7 @@ async def dry_run(
     draft_picks_report_only: bool = False,
     cap_space_report_only: bool = False,
     roster_breakdown_report_only: bool = False,
+    roster_violations_report_only: bool = False,
     traded_2027_picks_report_only: bool = False,
 ) -> int:
     _dotenv_path = Path(__file__).resolve().parent.parent / ".env"
@@ -1197,6 +1223,13 @@ async def dry_run(
         players = await client.get_players_map()
         await client.sleep_between_exports()
         rosters_json = await client.fetch_rosters()
+        injuries_json: dict[str, Any] = {}
+        standings_json: dict[str, Any] = {}
+        if roster_violations_report_only:
+            await client.sleep_between_exports()
+            injuries_json = await client.fetch_injuries()
+            await client.sleep_between_exports()
+            standings_json = await client.fetch_league_standings()
         await client.sleep_between_exports()
         scores_json = await client.fetch_player_scores_current_year()
         await client.sleep_between_exports()
@@ -1266,6 +1299,41 @@ async def dry_run(
             )
         )
         print("(dry-run: roster breakdown report generated from rosters export)", file=sys.stderr)
+        return 0
+
+    if roster_violations_report_only:
+        slot_limits = league_slot_limits(league_json)
+        print(
+            format_roster_violations_report_text(
+                franchise_names,
+                find_ir_eligibility_violations(
+                    rosters_json,
+                    injury_status_by_player_id(injuries_json),
+                    players,
+                    eligible_statuses=ir_eligible_statuses_from_env(),
+                ),
+                find_slot_limit_violations(
+                    rosters_json,
+                    roster_limit=slot_limits["roster"],
+                    taxi_limit=slot_limits["taxi"],
+                    ir_limit=slot_limits["ir"],
+                ),
+                salary_cap_violations=find_salary_cap_violations(
+                    franchise_salaries_from_standings(standings_json),
+                    franchise_salary_caps_from_league(league_json),
+                ),
+                starter_requirement_violations=find_starter_requirement_violations(
+                    rosters_json,
+                    players,
+                    position_minimums=starter_position_minimums(league_json),
+                    lineup_size=starter_lineup_size(league_json),
+                ),
+            )
+        )
+        print(
+            "(dry-run: roster violations from rosters + injuries + standings exports)",
+            file=sys.stderr,
+        )
         return 0
 
     if last_trade_only:
@@ -1719,6 +1787,14 @@ def main() -> None:
         help="With --dry-run, print active/taxi/IR player counts by team.",
     )
     parser.add_argument(
+        "--roster-violations-report",
+        action="store_true",
+        help=(
+            "With --dry-run, print IR eligibility, slot-limit, salary-cap, and "
+            "starting-roster depth violations."
+        ),
+    )
+    parser.add_argument(
         "--traded-2027-picks-report",
         action="store_true",
         help=(
@@ -1760,6 +1836,7 @@ def main() -> None:
         args.draft_picks_report,
         args.cap_space_report,
         args.roster_breakdown_report,
+        args.roster_violations_report,
         args.traded_2027_picks_report,
     )
     post_discord_flags = (
@@ -1825,6 +1902,20 @@ def main() -> None:
             parser.error("--draft-picks-report cannot be used with --roster-breakdown-report")
         if args.cap_space_report and args.roster_breakdown_report:
             parser.error("--cap-space-report cannot be used with --roster-breakdown-report")
+        if args.last_trade and args.roster_violations_report:
+            parser.error("--last-trade cannot be used with --roster-violations-report")
+        if args.with_dedupe and args.roster_violations_report:
+            parser.error("--with-dedupe cannot be used with --roster-violations-report")
+        if args.top_traders and args.roster_violations_report:
+            parser.error("--top-traders cannot be used with --roster-violations-report")
+        if args.draft_picks_report and args.roster_violations_report:
+            parser.error("--draft-picks-report cannot be used with --roster-violations-report")
+        if args.cap_space_report and args.roster_violations_report:
+            parser.error("--cap-space-report cannot be used with --roster-violations-report")
+        if args.roster_breakdown_report and args.roster_violations_report:
+            parser.error(
+                "--roster-breakdown-report cannot be used with --roster-violations-report"
+            )
         if args.last_trade and args.traded_2027_picks_report:
             parser.error("--last-trade cannot be used with --traded-2027-picks-report")
         if args.with_dedupe and args.traded_2027_picks_report:
@@ -1837,6 +1928,10 @@ def main() -> None:
             parser.error("--cap-space-report cannot be used with --traded-2027-picks-report")
         if args.roster_breakdown_report and args.traded_2027_picks_report:
             parser.error("--roster-breakdown-report cannot be used with --traded-2027-picks-report")
+        if args.roster_violations_report and args.traded_2027_picks_report:
+            parser.error(
+                "--roster-violations-report cannot be used with --traded-2027-picks-report"
+            )
         raise SystemExit(
             asyncio.run(
                 dry_run(
@@ -1847,6 +1942,7 @@ def main() -> None:
                     draft_picks_report_only=args.draft_picks_report,
                     cap_space_report_only=args.cap_space_report,
                     roster_breakdown_report_only=args.roster_breakdown_report,
+                    roster_violations_report_only=args.roster_violations_report,
                     traded_2027_picks_report_only=args.traded_2027_picks_report,
                 )
             )

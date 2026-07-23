@@ -18,13 +18,14 @@ ET = ZoneInfo("America/New_York")
 @pytest.mark.parametrize(
     "when, hour, minute, expected",
     [
-        ("2026-04-18", 15, 29, False),  # Sat before window
+        ("2026-04-18", 14, 59, False),  # Sat before window
+        ("2026-04-18", 15, 0, True),
         ("2026-04-18", 15, 30, True),
-        ("2026-04-19", 15, 30, False),  # Sun (weekly batch is Saturday-only)
-        ("2026-04-14", 15, 30, False),  # Tue
+        ("2026-04-19", 15, 0, False),  # Sun (weekly batch is Saturday-only)
+        ("2026-04-14", 15, 0, False),  # Tue
     ],
 )
-def test_weekly_reports_due_saturday_after_330(
+def test_weekly_reports_due_saturday_after_1500(
     when: str, hour: int, minute: int, expected: bool
 ) -> None:
     y, m, d = (int(p) for p in when.split("-"))

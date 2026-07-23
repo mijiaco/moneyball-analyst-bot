@@ -75,13 +75,28 @@ class MflClient:
         return params
 
     async def fetch_transactions_trade_days(self, days: int) -> list[dict[str, Any]]:
-        data = await self._get_json(
-            {
-                "TYPE": "transactions",
-                "TRANS_TYPE": "TRADE",
-                "DAYS": str(days),
-            }
-        )
+        return await self.fetch_transactions_by_type("TRADE", days=days)
+
+    async def fetch_transactions_by_type(
+        self,
+        trans_type: str,
+        *,
+        days: int | None = None,
+        count: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """
+        Fetch transactions filtered by TRANS_TYPE (e.g. TRADE, FREE_AGENT, BBID_WAIVER).
+        Comma-separated types are allowed by MFL.
+        """
+        params: dict[str, str] = {
+            "TYPE": "transactions",
+            "TRANS_TYPE": str(trans_type).strip(),
+        }
+        if days is not None:
+            params["DAYS"] = str(days)
+        if count is not None:
+            params["COUNT"] = str(count)
+        data = await self._get_json(params)
         block = data.get("transactions") or {}
         return _normalize_transaction_list(block.get("transaction"))
 
@@ -106,6 +121,10 @@ class MflClient:
         data = await self._get_json({"TYPE": "assets"})
         return data if isinstance(data, dict) else {}
 
+    async def fetch_future_draft_picks(self) -> dict[str, Any]:
+        data = await self._get_json({"TYPE": "futureDraftPicks"})
+        return data if isinstance(data, dict) else {}
+
     async def fetch_draft_results(self) -> dict[str, Any]:
         data = await self._get_json({"TYPE": "draftResults"})
         return data if isinstance(data, dict) else {}
@@ -114,6 +133,35 @@ class MflClient:
         """League accounting ledger (same source as the site accounting report)."""
         data = await self._get_json({"TYPE": "accounting"})
         return data if isinstance(data, dict) else {}
+
+    async def fetch_league_standings(self) -> dict[str, Any]:
+        """League standings (includes per-franchise salary totals when used)."""
+        data = await self._get_json({"TYPE": "leagueStandings"})
+        return data if isinstance(data, dict) else {}
+
+    async def fetch_injuries(self, *, week: str | None = None) -> dict[str, Any]:
+        """
+        NFL injury report (player id, status, details).
+
+        MFL requires this export on api.myfantasyleague.com (league hosts reject it).
+        League id / API key are not used for this request.
+        """
+        params: dict[str, str] = {"TYPE": "injuries", "JSON": "1"}
+        if week is not None and str(week).strip():
+            params["W"] = str(week).strip()
+        url = f"https://api.myfantasyleague.com/{self._year}/export"
+        last_err: BaseException | None = None
+        for attempt in range(3):
+            try:
+                response = await self._client.get(url, params=params)
+                response.raise_for_status()
+                data = response.json()
+                return data if isinstance(data, dict) else {}
+            except (httpx.HTTPError, OSError, ValueError) as exc:
+                last_err = exc
+                await asyncio.sleep(1.0 * (attempt + 1))
+        assert last_err is not None
+        raise last_err
 
     async def fetch_player_scores_current_year(self) -> dict[str, Any]:
         """
@@ -400,3 +448,45 @@ def draft_picks_by_franchise(
         future_out[franchise_id_str] = future_picks
 
     return current_out, future_out
+
+
+def future_draft_picks_by_franchise_from_export(
+    future_draft_picks_json: dict[str, Any],
+    franchise_names: dict[str, str],
+) -> dict[str, list[str]]:
+    """
+    Parse TYPE=futureDraftPicks export into description lines per owning franchise id.
+    """
+    out: dict[str, list[str]] = {}
+    block = future_draft_picks_json.get("futureDraftPicks") or {}
+    franchise_rows = _normalize_transaction_list(block.get("franchise"))
+    for franchise in franchise_rows:
+        franchise_id = franchise.get("id")
+        if franchise_id is None:
+            continue
+        franchise_id_str = str(franchise_id)
+        pick_rows = _normalize_transaction_list(franchise.get("futureDraftPick"))
+        lines: list[str] = []
+        for row in pick_rows:
+            year = str(row.get("year") or "").strip()
+            round_text = str(row.get("round") or "").strip()
+            original_for = str(row.get("originalPickFor") or "").strip()
+            if not year or not round_text:
+                continue
+            from_name = franchise_names.get(
+                original_for,
+                f"Franchise {original_for}" if original_for else "Unknown",
+            )
+            lines.append(
+                f"Year {year} Round {round_text} Draft Pick from {from_name}"
+            )
+        out[franchise_id_str] = lines
+    return out
+
+
+def assets_export_has_franchise_data(assets_json: dict[str, Any]) -> bool:
+    """True when assets export includes franchise rows (not an auth/error-only payload)."""
+    if assets_json.get("error"):
+        return False
+    block = assets_json.get("assets") or {}
+    return bool(_normalize_transaction_list(block.get("franchise")))
