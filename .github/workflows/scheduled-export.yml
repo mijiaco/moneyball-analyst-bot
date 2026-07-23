@@ -85,7 +85,7 @@ jobs:
             const { owner, repo } = context.repo;
             const branch = context.ref.replace("refs/heads/", "");
 
-            const filePaths = ["data/seen_trades.json", "data/reports_state.json", "data/rfa_state.json"];
+            const filePaths = ["data/seen_trades.json", "data/reports_state.json", "data/rfa_state.json", "data/taxi_cut_state.json"];
 
             for (const filePath of filePaths) {
               if (!fs.existsSync(filePath)) {

@@ -140,6 +140,11 @@ class MflClient:
         data = await self._get_json({"TYPE": "leagueStandings"})
         return data if isinstance(data, dict) else {}
 
+    async def fetch_salary_adjustments(self) -> dict[str, Any]:
+        """Extra salary adjustments (dead money, manual refunds, etc.)."""
+        data = await self._get_json({"TYPE": "salaryAdjustments"})
+        return data if isinstance(data, dict) else {}
+
     async def fetch_injuries(self, *, week: str | None = None) -> dict[str, Any]:
         """
         NFL injury report (player id, status, details).

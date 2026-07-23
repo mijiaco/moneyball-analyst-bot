@@ -7,7 +7,8 @@ Instructions for AI assistants and developers working in this repository.
 - Polls a **MyFantasyLeague (MFL)** league via JSON **export** HTTP APIs.
 - Posts **Discord** messages (embeds) for **trades** and optional **trade bait** updates.
 - Posts optional **Restricted Free Agent (RFA)** report embeds (list changes + Saturday weekly) and **invalid RFA claim** alerts; syncs the active RFA list to Google Sheets.
-- Posts optional Saturday weekly embeds (Top Traders, draft picks, roster breakdown, **roster violations**).
+- Posts optional Saturday weekly embeds (Top Traders, draft picks, roster breakdown, **roster violations**, **taxi-cut cap refunds pending**).
+- Posts immediate **taxi squad cut** alerts when a taxi player is dropped and dead-money hits the cap (commish refund needed).
 - Persists **dedupe state** in `data/seen_trades.json`, optional weekly report cursor in `data/reports_state.json`, and RFA state in `data/rfa_state.json` so repeats are not announced.
 - **Primary runtime:** GitHub Actions workflow `scheduled-export` running `python -m src.run_once` (no long-lived server required).
 - **Optional:** `python -m src.bot` is a Discord gateway client for local/long-poll use; the maintainer typically relies on Actions instead.
@@ -28,6 +29,7 @@ Do **not** commit secrets, `.env`, or API keys. Never overwrite `.env` without e
 | `src/rfa_state.py` | RFA roster-diff state machine; FREE_AGENT / BBID_WAIVER parsers. |
 | `src/rfa_report.py` | RFA Discord formatters (and re-exports from `rfa_state`). |
 | `src/roster_violations.py` | IR eligibility, roster/taxi/IR slot limits, salary cap, and starter-depth violation detection/formatting. |
+| `src/taxi_cut_report.py` | Taxi-squad cut dead-money detection, refund matching, immediate + weekly Discord formatters. |
 | `src/google_sheets.py` | Service-account Sheets read (top 32) + write (RFA tab). |
 | `src/bot.py` | Optional Discord.py bot. |
 | `.github/workflows/scheduled-export.yml` | Actions workflow: dispatch-only triggers, env wiring, Contents API commit for state files. |
@@ -75,6 +77,9 @@ Share the spreadsheet with the service account email (Editor).
 - `MFL_RFA_INVALID_CLAIM_ALERTS_ENABLED` — default true
 - `MFL_RFA_LOOKBACK_DAYS` — defaults to `MFL_TRADE_LOOKBACK_DAYS`
 - `MFL_WEEKLY_REPORTS_INCLUDE_ROSTER_VIOLATIONS` — default true (Saturday weekly batch)
+- `MFL_WEEKLY_REPORTS_INCLUDE_TAXI_CUT_REFUNDS` — default true (Saturday list of unreimbursed taxi-cut dead money)
+- `MFL_TAXI_CUT_ALERTS_ENABLED` — default true (immediate Discord alert on taxi cut)
+- `MFL_TAXI_CUT_LOOKBACK_DAYS` — defaults to `MFL_TRADE_LOOKBACK_DAYS`
 - `MFL_IR_ELIGIBLE_STATUSES` — comma/pipe list of NFL injury statuses allowed on IR (default: IR/Out/Doubtful + Suspended/Holdout/Retired/etc.; Questionable excluded)
 
 Local: use a `.env` file (loaded by `python-dotenv` where used). **`.env` is gitignored.**
@@ -134,6 +139,7 @@ The workflow uses `actions/github-script` to commit, via the Contents API (with 
 - `data/seen_trades.json`
 - `data/reports_state.json` (if present)
 - `data/rfa_state.json` (if present)
+- `data/taxi_cut_state.json` (if present)
 
 So each **clone** of this repo on GitHub has **its own** dedupe history unless you share or sync files manually.
 

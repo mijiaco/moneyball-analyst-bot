@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import sys
+import time
 from datetime import datetime
 from typing import Any
 from pathlib import Path
@@ -58,6 +59,22 @@ from src.roster_violations import (
     league_slot_limits,
     starter_lineup_size,
     starter_position_minimums,
+)
+from src.taxi_cut_report import (
+    TAXI_CUT_ALERT_COLOR,
+    TAXI_CUT_ALERT_TITLE,
+    TAXI_CUT_WEEKLY_COLOR,
+    TAXI_CUT_WEEKLY_TITLE,
+    format_taxi_cut_alert_text,
+    format_taxi_cut_weekly_report_text,
+    include_taxi_salary_percent,
+    load_taxi_cut_state,
+    parse_salary_adjustments,
+    save_taxi_cut_state,
+    taxi_cut_alert_fingerprint,
+    taxi_players_from_rosters,
+    unreimbursed_taxi_cuts,
+    update_taxi_cut_state,
 )
 from src.trade_notify import (
     cap_space_available_by_franchise,
@@ -213,6 +230,7 @@ async def _async_main() -> int:
     players_cache = data_dir / "players_cache.json"
     reports_state_path = _weekly_reports_state_path(data_dir)
     rfa_state_path = data_dir / "rfa_state.json"
+    taxi_cut_state_path = data_dir / "taxi_cut_state.json"
     seen = load_seen(seen_path)
 
     lookback = int(os.environ.get("MFL_TRADE_LOOKBACK_DAYS", "14"))
@@ -232,12 +250,19 @@ async def _async_main() -> int:
     weekly_reports_include_roster_violations = env_bool(
         "MFL_WEEKLY_REPORTS_INCLUDE_ROSTER_VIOLATIONS", True
     )
+    weekly_reports_include_taxi_cut_refunds = env_bool(
+        "MFL_WEEKLY_REPORTS_INCLUDE_TAXI_CUT_REFUNDS", True
+    )
     sunday_unpaid_report_enabled = env_bool("MFL_SUNDAY_UNPAID_REPORT_ENABLED", True)
     rfa_report_enabled = env_bool("MFL_RFA_REPORT_ENABLED", True)
     rfa_invalid_claim_alerts_enabled = env_bool(
         "MFL_RFA_INVALID_CLAIM_ALERTS_ENABLED", True
     )
     rfa_lookback_days = int(os.environ.get("MFL_RFA_LOOKBACK_DAYS", str(lookback)))
+    taxi_cut_alerts_enabled = env_bool("MFL_TAXI_CUT_ALERTS_ENABLED", True)
+    taxi_cut_lookback_days = int(
+        os.environ.get("MFL_TAXI_CUT_LOOKBACK_DAYS", str(lookback))
+    )
 
     connect = mfl_connect_settings()
     if connect is None:
@@ -261,6 +286,7 @@ async def _async_main() -> int:
     )
     updated_reports_state = False
     updated_rfa_state = False
+    updated_taxi_cut_state = False
     try:
         pending_posts, updated = await poll_trades_for_new_messages(
             mfl,
@@ -577,6 +603,92 @@ async def _async_main() -> int:
 
                 save_rfa_state(rfa_state_path, updated_state)
                 updated_rfa_state = True
+
+        if taxi_cut_alerts_enabled or weekly_reports_include_taxi_cut_refunds:
+            now_taxi = datetime.now(ZoneInfo("America/New_York"))
+            as_of_taxi = f"As of {_as_of_label_et(now_taxi)}"
+            taxi_state = load_taxi_cut_state(taxi_cut_state_path)
+            await mfl.sleep_between_exports()
+            league_json = await mfl.fetch_league()
+            franchise_names = franchise_names_from_league(league_json)
+            taxi_percent = include_taxi_salary_percent(league_json)
+            await mfl.sleep_between_exports()
+            rosters_json = await mfl.fetch_rosters()
+            current_taxi = taxi_players_from_rosters(rosters_json)
+            await mfl.sleep_between_exports()
+            fa_txs = await mfl.fetch_transactions_by_type(
+                "FREE_AGENT",
+                days=taxi_cut_lookback_days,
+            )
+            await mfl.sleep_between_exports()
+            adjustments_json = await mfl.fetch_salary_adjustments()
+            await mfl.sleep_between_exports()
+            players = await mfl.get_players_map()
+            fa_drops = [
+                move
+                for move in parse_free_agent_moves(fa_txs)
+                if not move.is_add
+            ]
+            updated_taxi_state, new_taxi_cuts = update_taxi_cut_state(
+                taxi_state,
+                current_taxi_players=current_taxi,
+                free_agent_drops=fa_drops,
+                salary_adjustments=parse_salary_adjustments(adjustments_json),
+                players_map=players,
+                taxi_percent=taxi_percent,
+                now_ts=int(time.time()),
+            )
+
+            if taxi_cut_alerts_enabled:
+                for cut in new_taxi_cuts:
+                    key = taxi_cut_alert_fingerprint(cut)
+                    if key in seen:
+                        continue
+                    pending_posts.append(
+                        (
+                            key,
+                            TradeMessagePayload(
+                                TAXI_CUT_ALERT_TITLE,
+                                format_taxi_cut_alert_text(cut, franchise_names),
+                                TAXI_CUT_ALERT_COLOR,
+                            ),
+                        )
+                    )
+
+            if weekly_reports_include_taxi_cut_refunds and _is_weekly_reports_due(
+                now_taxi
+            ):
+                week_key = _current_week_key_et(now_taxi)
+                if week_key != str(updated_taxi_state.get("last_weekly_week_key") or ""):
+                    pending_rows = unreimbursed_taxi_cuts(updated_taxi_state)
+                    report_text = format_taxi_cut_weekly_report_text(
+                        pending_rows,
+                        franchise_names,
+                    )
+                    body = (
+                        report_text.split("\n\n", 1)[1]
+                        if "\n\n" in report_text
+                        else report_text
+                    )
+                    description = f"{as_of_taxi}\n\n{body}"
+                    if len(description) > 4096:
+                        description = description[:4093] + "..."
+                    report_key = f"WEEKLY_REPORT|{week_key}|{TAXI_CUT_WEEKLY_TITLE}"
+                    if report_key not in seen:
+                        pending_posts.append(
+                            (
+                                report_key,
+                                TradeMessagePayload(
+                                    TAXI_CUT_WEEKLY_TITLE,
+                                    description,
+                                    TAXI_CUT_WEEKLY_COLOR,
+                                ),
+                            )
+                        )
+                    updated_taxi_state["last_weekly_week_key"] = week_key
+
+            save_taxi_cut_state(taxi_cut_state_path, updated_taxi_state)
+            updated_taxi_cut_state = True
     except httpx.HTTPStatusError as exc:
         logger.exception("Upstream HTTP error: %s", exc)
         return 1
@@ -612,6 +724,8 @@ async def _async_main() -> int:
         logger.info("Updated weekly reports state")
     if updated_rfa_state:
         logger.info("Updated RFA report state")
+    if updated_taxi_cut_state:
+        logger.info("Updated taxi-cut refund state")
     return 0
 
 
