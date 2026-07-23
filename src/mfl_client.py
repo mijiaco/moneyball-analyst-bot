@@ -125,6 +125,7 @@ class MflClient:
         data = await self._get_json({"TYPE": "futureDraftPicks"})
         return data if isinstance(data, dict) else {}
 
+
     async def fetch_draft_results(self) -> dict[str, Any]:
         data = await self._get_json({"TYPE": "draftResults"})
         return data if isinstance(data, dict) else {}
