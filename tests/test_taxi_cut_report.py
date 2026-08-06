@@ -126,6 +126,100 @@ def test_update_detects_taxi_cut_via_history_and_refund() -> None:
     assert unreimbursed_taxi_cuts(updated2) == []
 
 
+def test_update_clears_pending_when_dropped_adjustment_removed() -> None:
+    """Refund via deleting the Dropped dead-money charge (no negative adj)."""
+    adj_key = (
+        "200|0018|1.60|Dropped Moss, Le'Veon MIA RB "
+        "(Salary: $2.00, Original Contract: 3, Years Left: 3)"
+    )
+    state = {
+        "taxi_seen": {},
+        "pending_cuts": [
+            {
+                "player_id": "17479",
+                "franchise_id": "0018",
+                "timestamp": 200,
+                "dead_money": 1.6,
+                "salary": 2.0,
+                "years_left": 3,
+                "player_label": "Moss, Le'Veon MIA RB",
+                "adjustment_key": adj_key,
+                "refunded": False,
+                "refund_ts": 0,
+            }
+        ],
+        "last_weekly_week_key": "",
+        "initialized": True,
+    }
+    updated, new_cuts = update_taxi_cut_state(
+        state,
+        current_taxi_players={},
+        free_agent_drops=[],
+        salary_adjustments=[],
+        players_map={"17479": "Moss, Le'Veon MIA RB"},
+        taxi_percent=25.0,
+        now_ts=400,
+    )
+    assert new_cuts == []
+    assert unreimbursed_taxi_cuts(updated) == []
+    moss = updated["pending_cuts"][0]
+    assert moss["refunded"] is True
+    assert moss["refund_ts"] == 400
+
+
+def test_update_keeps_pending_while_dropped_adjustment_still_present() -> None:
+    adjustments = parse_salary_adjustments(
+        {
+            "salaryAdjustments": {
+                "salaryAdjustment": {
+                    "franchise_id": "0018",
+                    "timestamp": "200",
+                    "amount": "1.6",
+                    "description": (
+                        "Dropped Moss, Le'Veon MIA RB "
+                        "(Salary: $2.00, Original Contract: 3, Years Left: 3)"
+                    ),
+                    "id": "0",
+                }
+            }
+        }
+    )
+    adj_key = (
+        "200|0018|1.60|Dropped Moss, Le'Veon MIA RB "
+        "(Salary: $2.00, Original Contract: 3, Years Left: 3)"
+    )
+    state = {
+        "taxi_seen": {},
+        "pending_cuts": [
+            {
+                "player_id": "17479",
+                "franchise_id": "0018",
+                "timestamp": 200,
+                "dead_money": 1.6,
+                "salary": 2.0,
+                "years_left": 3,
+                "player_label": "Moss, Le'Veon MIA RB",
+                "adjustment_key": adj_key,
+                "refunded": False,
+                "refund_ts": 0,
+            }
+        ],
+        "last_weekly_week_key": "",
+        "initialized": True,
+    }
+    updated, new_cuts = update_taxi_cut_state(
+        state,
+        current_taxi_players={},
+        free_agent_drops=[],
+        salary_adjustments=adjustments,
+        players_map={"17479": "Moss, Le'Veon MIA RB"},
+        taxi_percent=25.0,
+        now_ts=400,
+    )
+    assert new_cuts == []
+    assert len(unreimbursed_taxi_cuts(updated)) == 1
+
+
 def test_update_detects_moss_via_taxi_dead_money_heuristic() -> None:
     state = {
         "taxi_seen": {},

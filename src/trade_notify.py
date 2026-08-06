@@ -49,6 +49,19 @@ from src.roster_violations import (
     starter_lineup_size,
     starter_position_minimums,
 )
+from src.rfa_state import parse_free_agent_moves
+from src.taxi_cut_report import (
+    TAXI_CUT_WEEKLY_COLOR,
+    TAXI_CUT_WEEKLY_TITLE,
+    format_taxi_cut_weekly_report_text,
+    include_taxi_salary_percent,
+    load_taxi_cut_state,
+    parse_salary_adjustments,
+    save_taxi_cut_state,
+    taxi_players_from_rosters,
+    unreimbursed_taxi_cuts,
+    update_taxi_cut_state,
+)
 
 TRADE_COMMENTARY_LINES: tuple[str, ...] = (
     "What a trade! Just got off the phone with my sources, and this one has the league buzzing.",
@@ -1730,6 +1743,99 @@ async def post_top_traders_embed_to_discord() -> int:
     return 0
 
 
+async def post_taxi_cut_refunds_embed_to_discord() -> int:
+    """Post pending taxi-cut cap refunds; channel from ``discord_target_channel_id()``."""
+    _dotenv_path = Path(__file__).resolve().parent.parent / ".env"
+    load_dotenv(_dotenv_path, override=True)
+    token = (os.environ.get("DISCORD_BOT_TOKEN") or "").strip()
+    channel_id = discord_target_channel_id()
+    if not token:
+        print("DISCORD_BOT_TOKEN is required.", file=sys.stderr)
+        return 1
+    if not channel_id:
+        print(
+            "Set TEST_DISCORD_CHANNEL_ID, DISCORD_CHANNEL_ID, or PROD_DISCORD_CHANNEL_ID.",
+            file=sys.stderr,
+        )
+        return 1
+
+    connect = mfl_connect_settings()
+    if connect is None:
+        miss = ", ".join(missing_mfl_connect_env_names())
+        print(
+            f"Missing required env: {miss}. {mfl_connect_env_help_suffix()}",
+            file=sys.stderr,
+        )
+        return 1
+
+    host, year, league_id = connect
+    api_key = os.environ.get("MFL_API_KEY") or None
+    user_agent = os.environ.get("MFL_USER_AGENT") or None
+    lookback = int(os.environ.get("MFL_TAXI_CUT_LOOKBACK_DAYS") or os.environ.get("MFL_TRADE_LOOKBACK_DAYS", "14"))
+    data_dir = Path(__file__).resolve().parent.parent / "data"
+    players_cache = data_dir / "players_cache.json"
+    taxi_cut_state_path = data_dir / "taxi_cut_state.json"
+
+    client = MflClient(
+        host=host,
+        year=year,
+        league_id=league_id,
+        api_key=api_key,
+        user_agent=user_agent,
+        players_cache_path=players_cache,
+    )
+    try:
+        league_json = await client.fetch_league()
+        await client.sleep_between_exports()
+        rosters_json = await client.fetch_rosters()
+        await client.sleep_between_exports()
+        fa_txs = await client.fetch_transactions_by_type("FREE_AGENT", days=lookback)
+        await client.sleep_between_exports()
+        adjustments_json = await client.fetch_salary_adjustments()
+        await client.sleep_between_exports()
+        players_map = await client.get_players_map()
+    finally:
+        await client.aclose()
+
+    franchise_names = franchise_names_from_league(league_json)
+    state = load_taxi_cut_state(taxi_cut_state_path)
+    updated_state, _new_cuts = update_taxi_cut_state(
+        state,
+        current_taxi_players=taxi_players_from_rosters(rosters_json),
+        free_agent_drops=[
+            move for move in parse_free_agent_moves(fa_txs) if not move.is_add
+        ],
+        salary_adjustments=parse_salary_adjustments(adjustments_json),
+        players_map=players_map,
+        taxi_percent=include_taxi_salary_percent(league_json),
+        now_ts=int(time.time()),
+    )
+    save_taxi_cut_state(taxi_cut_state_path, updated_state)
+
+    report_text = format_taxi_cut_weekly_report_text(
+        unreimbursed_taxi_cuts(updated_state),
+        franchise_names,
+    )
+    now_et = datetime.now(ZoneInfo("America/New_York"))
+    as_of_line = f"As of {now_et.strftime('%Y-%m-%d %I:%M %p ET')}"
+    body_text = report_text.split("\n\n", 1)[1] if "\n\n" in report_text else report_text
+    description = f"{as_of_line}\n\n{body_text}"
+    if len(description) > 4096:
+        description = description[:4093] + "..."
+    ok = await _discord_post_embed(
+        token=token,
+        channel_id=channel_id,
+        title=TAXI_CUT_WEEKLY_TITLE,
+        description=description,
+        color=TAXI_CUT_WEEKLY_COLOR,
+    )
+    if not ok:
+        return 1
+
+    print("Posted taxi-cut cap refunds embed to Discord.", file=sys.stderr)
+    return 0
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Fetch league trades and print formatted output.",
@@ -1815,6 +1921,14 @@ def main() -> None:
             "PROD_DISCORD_CHANNEL_ID only; TEST_DISCORD_CHANNEL_ID is ignored)."
         ),
     )
+    parser.add_argument(
+        "--post-taxi-cut-refunds-discord",
+        action="store_true",
+        help=(
+            "Post Taxi Cut Cap Refunds Pending to Discord (same channel resolution as "
+            "--post-roster-breakdown-discord)."
+        ),
+    )
     args = parser.parse_args()
 
     mode_flags = (
@@ -1832,11 +1946,12 @@ def main() -> None:
         args.post_roster_breakdown_discord,
         args.post_draft_picks_discord,
         args.post_top_traders_discord,
+        args.post_taxi_cut_refunds_discord,
     )
     if sum(1 for f in post_discord_flags if f) > 1:
         parser.error(
             "use only one of --post-roster-breakdown-discord, --post-draft-picks-discord, "
-            "or --post-top-traders-discord"
+            "--post-top-traders-discord, or --post-taxi-cut-refunds-discord"
         )
     if args.post_roster_breakdown_discord:
         if any(mode_flags):
@@ -1859,6 +1974,13 @@ def main() -> None:
                 "or other report flags"
             )
         raise SystemExit(asyncio.run(post_top_traders_embed_to_discord()))
+    if args.post_taxi_cut_refunds_discord:
+        if any(mode_flags):
+            parser.error(
+                "--post-taxi-cut-refunds-discord cannot be combined with --dry-run "
+                "or other report flags"
+            )
+        raise SystemExit(asyncio.run(post_taxi_cut_refunds_embed_to_discord()))
 
     if args.dry_run:
         if args.last_trade and args.with_dedupe:

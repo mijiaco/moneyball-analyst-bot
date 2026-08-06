@@ -259,6 +259,11 @@ def update_taxi_cut_state(
     """
     Refresh taxi history, detect new taxi cuts, apply refund matches.
 
+    A cut is treated as reimbursed when either:
+    - a matching negative salary adjustment appears on the franchise, or
+    - the originating Dropped dead-money adjustment is no longer present
+      (commish deleted the charge instead of posting a refund line).
+
     Returns (updated_state, newly_detected_cuts_for_immediate_alerts).
     """
     taxi_seen_raw = state.get("taxi_seen") or {}
@@ -368,6 +373,19 @@ def update_taxi_cut_state(
             row["refunded"] = True
             row["refund_ts"] = adj.timestamp
             break
+
+    # Commish often clears taxi dead money by deleting the Dropped charge
+    # rather than posting a matching negative adjustment.
+    current_adjustment_keys = {_adjustment_key(adj) for adj in salary_adjustments}
+    for row in pending:
+        if row.get("refunded"):
+            continue
+        adj_key = str(row.get("adjustment_key") or "")
+        if not adj_key:
+            continue
+        if adj_key not in current_adjustment_keys:
+            row["refunded"] = True
+            row["refund_ts"] = now_ts
 
     updated = {
         "taxi_seen": taxi_seen,
