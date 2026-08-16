@@ -15,11 +15,14 @@ TAXI_CUT_ALERT_COLOR = 15105570  # orange / warning
 TAXI_CUT_WEEKLY_TITLE = "Taxi Cut Cap Refunds Pending"
 TAXI_CUT_WEEKLY_COLOR = 15105570
 
+# MFL sometimes inserts fields such as ``Other Notes:`` (often with a bare CR)
+# between Salary and Original Contract.
 _DROPPED_ADJ_RE = re.compile(
     r"^Dropped\s+(?P<label>.+?)\s*\(\s*Salary:\s*\$(?P<salary>[0-9.,]+)\s*,"
-    r"\s*Original Contract:\s*(?P<original>\d+)\s*,"
+    r"(?:.*?\s*)?"
+    r"Original Contract:\s*(?P<original>\d+)\s*,"
     r"\s*Years Left:\s*(?P<years>\d+)\s*\)\s*$",
-    re.IGNORECASE,
+    re.IGNORECASE | re.DOTALL,
 )
 
 
@@ -414,18 +417,41 @@ def unreimbursed_taxi_cuts(state: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
+def group_taxi_cuts_for_alerts(
+    cuts: list[TaxiCutEvent],
+) -> list[list[TaxiCutEvent]]:
+    """Group cuts by franchise so one Discord embed can list every cut in a batch."""
+    grouped: dict[str, list[TaxiCutEvent]] = {}
+    order: list[str] = []
+    for cut in cuts:
+        if cut.franchise_id not in grouped:
+            order.append(cut.franchise_id)
+            grouped[cut.franchise_id] = []
+        grouped[cut.franchise_id].append(cut)
+    return [grouped[franchise_id] for franchise_id in order]
+
+
 def format_taxi_cut_alert_text(
-    cut: TaxiCutEvent,
+    cut: TaxiCutEvent | list[TaxiCutEvent],
     franchise_names: dict[str, str],
 ) -> str:
-    team = franchise_names.get(cut.franchise_id, f"Franchise {cut.franchise_id}")
-    lines = [
-        f"**{team}**",
-        f"* Player: {cut.player_label}",
-        f"* Taxi salary: {format_money(cut.salary)}",
-        f"* Cap hit to refund: {format_money(cut.dead_money)}",
-        f"* Contract years left: {cut.years_left}",
-    ]
+    cuts = cut if isinstance(cut, list) else [cut]
+    if not cuts:
+        return ""
+    franchise_id = cuts[0].franchise_id
+    team = franchise_names.get(franchise_id, f"Franchise {franchise_id}")
+    lines = [f"**{team}**"]
+    for index, row in enumerate(cuts):
+        if index:
+            lines.append("")
+        lines.extend(
+            [
+                f"* Player: {row.player_label}",
+                f"* Taxi salary: {format_money(row.salary)}",
+                f"* Cap hit to refund: {format_money(row.dead_money)}",
+                f"* Contract years left: {row.years_left}",
+            ]
+        )
     return "\n".join(lines)
 
 

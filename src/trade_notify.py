@@ -36,6 +36,8 @@ from src.mfl_env import (
     mfl_connect_settings,
 )
 from src.roster_violations import (
+    _is_ir_roster_status,
+    _is_taxi_roster_status,
     find_ir_eligibility_violations,
     find_salary_cap_violations,
     find_slot_limit_violations,
@@ -975,10 +977,11 @@ def roster_slot_counts_by_franchise(
         taxi_count = 0
         ir_count = 0
         for player in players:
-            status = str(player.get("status") or "").strip().upper()
-            if "IR" in status:
+            status = str(player.get("status") or "")
+            # MFL uses INJURED_RESERVE (not the substring "IR").
+            if _is_ir_roster_status(status):
                 ir_count += 1
-            elif "TAXI" in status:
+            elif _is_taxi_roster_status(status):
                 taxi_count += 1
             else:
                 active_count += 1

@@ -67,6 +67,7 @@ from src.taxi_cut_report import (
     TAXI_CUT_WEEKLY_TITLE,
     format_taxi_cut_alert_text,
     format_taxi_cut_weekly_report_text,
+    group_taxi_cuts_for_alerts,
     include_taxi_salary_percent,
     load_taxi_cut_state,
     parse_salary_adjustments,
@@ -656,16 +657,21 @@ async def _async_main() -> int:
             )
 
             if taxi_cut_alerts_enabled:
-                for cut in new_taxi_cuts:
-                    key = taxi_cut_alert_fingerprint(cut)
-                    if key in seen:
-                        continue
+                unseen_cuts = [
+                    cut
+                    for cut in new_taxi_cuts
+                    if taxi_cut_alert_fingerprint(cut) not in seen
+                ]
+                for cut_group in group_taxi_cuts_for_alerts(unseen_cuts):
+                    keys = [taxi_cut_alert_fingerprint(cut) for cut in cut_group]
                     pending_posts.append(
                         (
-                            key,
+                            keys,
                             TradeMessagePayload(
                                 TAXI_CUT_ALERT_TITLE,
-                                format_taxi_cut_alert_text(cut, franchise_names),
+                                format_taxi_cut_alert_text(
+                                    cut_group, franchise_names
+                                ),
                                 TAXI_CUT_ALERT_COLOR,
                             ),
                         )
@@ -724,13 +730,19 @@ async def _async_main() -> int:
         timeout=60.0,
         headers=headers,
     ) as dclient:
-        for key, payload in pending_posts:
+        for key_or_keys, payload in pending_posts:
+            keys = (
+                [key_or_keys]
+                if isinstance(key_or_keys, str)
+                else [str(key) for key in key_or_keys]
+            )
             ok = await _post_embed_return_ok(dclient, channel_id, payload)
             if not ok:
                 if updated:
                     save_seen(seen_path, seen)
                 return 1
-            seen.add(key)
+            for key in keys:
+                seen.add(key)
             updated = True
 
     if updated:

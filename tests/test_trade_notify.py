@@ -860,6 +860,7 @@ def test_roster_slot_counts_by_franchise_splits_active_taxi_ir() -> None:
                     {"id": "2", "status": "TAXI_SQUAD"},
                     {"id": "3", "status": "IR"},
                     {"id": "4", "status": ""},
+                    {"id": "5", "status": "INJURED_RESERVE"},
                 ],
             }
         }
@@ -867,7 +868,7 @@ def test_roster_slot_counts_by_franchise_splits_active_taxi_ir() -> None:
     counts = roster_slot_counts_by_franchise(rosters_json)
     assert counts["0001"]["active"] == 2
     assert counts["0001"]["taxi"] == 1
-    assert counts["0001"]["ir"] == 1
+    assert counts["0001"]["ir"] == 2
 
 
 def test_format_roster_breakdown_report_text_renders_expected_lines_legacy_no_cap() -> None:

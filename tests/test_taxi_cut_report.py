@@ -26,6 +26,102 @@ def test_parse_dropped_adjustment_details_moss() -> None:
     assert years == 3
 
 
+def test_parse_dropped_adjustment_details_allows_other_notes() -> None:
+    parsed = parse_dropped_adjustment_details(
+        "Dropped Trayanum, Chip NYJ RB "
+        "(Salary: $1.00, Other Notes: \r, Original Contract: 3, Years Left: 3)"
+    )
+    assert parsed is not None
+    label, salary, years = parsed
+    assert label == "Trayanum, Chip NYJ RB"
+    assert salary == 1.0
+    assert years == 3
+
+
+def test_update_detects_multiple_taxi_cuts_same_franchise() -> None:
+    state = {
+        "taxi_seen": {
+            "17488": {"franchise_id": "0005", "salary": "1", "last_seen_ts": 100},
+            "17489": {"franchise_id": "0005", "salary": "1", "last_seen_ts": 100},
+        },
+        "pending_cuts": [],
+        "last_weekly_week_key": "",
+        "initialized": True,
+    }
+    adjustments = parse_salary_adjustments(
+        {
+            "salaryAdjustments": {
+                "salaryAdjustment": [
+                    {
+                        "franchise_id": "0005",
+                        "timestamp": "1786713784",
+                        "amount": "0.8",
+                        "description": (
+                            "Dropped Stewart, Terion KCC RB "
+                            "(Salary: $1.00, Original Contract: 3, Years Left: 3)"
+                        ),
+                        "id": "0",
+                    },
+                    {
+                        "franchise_id": "0005",
+                        "timestamp": "1786713804",
+                        "amount": "0.8",
+                        "description": (
+                            "Dropped Trayanum, Chip NYJ RB "
+                            "(Salary: $1.00, Other Notes: \r, "
+                            "Original Contract: 3, Years Left: 3)"
+                        ),
+                        "id": "1",
+                    },
+                ]
+            }
+        }
+    )
+    players = {
+        "17488": "Stewart, Terion KCC RB",
+        "17489": "Trayanum, Chip NYJ RB",
+    }
+    drops = [
+        FreeAgentMove(
+            player_id="17488",
+            franchise_id="0005",
+            timestamp=1786713784,
+            is_add=False,
+        ),
+        FreeAgentMove(
+            player_id="17489",
+            franchise_id="0005",
+            timestamp=1786713804,
+            is_add=False,
+        ),
+    ]
+    updated, new_cuts = update_taxi_cut_state(
+        state,
+        current_taxi_players={},
+        free_agent_drops=drops,
+        salary_adjustments=adjustments,
+        players_map=players,
+        taxi_percent=25.0,
+        now_ts=1786713900,
+    )
+    assert [cut.player_id for cut in new_cuts] == ["17488", "17489"]
+    assert len(unreimbursed_taxi_cuts(updated)) == 2
+    assert "17488" not in updated["taxi_seen"]
+    assert "17489" not in updated["taxi_seen"]
+
+    from src.taxi_cut_report import group_taxi_cuts_for_alerts, format_taxi_cut_alert_text
+
+    groups = group_taxi_cuts_for_alerts(new_cuts)
+    assert len(groups) == 1
+    assert len(groups[0]) == 2
+    alert = format_taxi_cut_alert_text(
+        groups[0], {"0005": "Brute Force & Ignorance"}
+    )
+    assert "Stewart, Terion KCC RB" in alert
+    assert "Trayanum, Chip NYJ RB" in alert
+    assert alert.count("Cap hit to refund:") == 2
+
+
 def test_looks_like_taxi_dead_money_matches_user_example() -> None:
     assert looks_like_taxi_dead_money(
         dead_money=7.5, salary=10.0, years_left=3, taxi_percent=25.0
