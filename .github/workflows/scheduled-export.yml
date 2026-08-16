@@ -22,7 +22,8 @@ permissions:
   contents: write
 
 concurrency:
-  group: scheduled-export
+  # Serialize polls so a slow Saturday weekly run cannot overlap the next cron tick.
+  group: scheduled-export-${{ github.repository }}
   cancel-in-progress: false
 
 jobs:
@@ -45,6 +46,20 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          ref: main
+
+      # workflow_dispatch pins the run to the SHA at trigger time; overlapping or
+      # queued polls can miss a just-committed week-key claim. Refresh state from
+      # current main before polling.
+      - name: Refresh scheduler state from main
+        run: |
+          set -e
+          git fetch origin main
+          for path in data/seen_trades.json data/reports_state.json data/rfa_state.json data/taxi_cut_state.json; do
+            if git cat-file -e "origin/main:$path" 2>/dev/null; then
+              git checkout origin/main -- "$path"
+            fi
+          done
 
       - name: Require repository secrets
         run: |

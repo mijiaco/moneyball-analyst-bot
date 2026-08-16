@@ -91,6 +91,7 @@ from src.trade_notify import (
     traded_own_future_pick_rounds_by_franchise,
 )
 from src.trade_poll_core import TradeMessagePayload, poll_trades_for_new_messages
+from src.weekly_claim import claim_weekly_reports_week, weekly_report_dedupe_key
 
 logger = logging.getLogger(__name__)
 
@@ -287,6 +288,9 @@ async def _async_main() -> int:
     updated_reports_state = False
     updated_rfa_state = False
     updated_taxi_cut_state = False
+    # Freeze schedule gates at process start so a pre-3pm ET poll cannot
+    # cross into the Saturday window mid-fetch and race a 3pm poll.
+    schedule_now_et = datetime.now(ZoneInfo("America/New_York"))
     try:
         pending_posts, updated = await poll_trades_for_new_messages(
             mfl,
@@ -301,12 +305,19 @@ async def _async_main() -> int:
         )
         weekly_report_payloads: list[tuple[str, str, int]] = []
         if weekly_reports_enabled:
-            now_et = datetime.now(ZoneInfo("America/New_York"))
+            now_et = schedule_now_et
             as_of_line = f"As of {_as_of_label_et(now_et)}"
             if _is_weekly_reports_due(now_et):
                 current_week_key = _current_week_key_et(now_et)
-                last_week_key = _load_last_weekly_reports_week_key(reports_state_path)
-                if current_week_key != last_week_key:
+                should_post_weekly, weekly_state_changed = claim_weekly_reports_week(
+                    reports_state_path,
+                    current_week_key,
+                    load_last=_load_last_weekly_reports_week_key,
+                    save_last=_save_last_weekly_reports_week_key,
+                )
+                if weekly_state_changed:
+                    updated_reports_state = True
+                if should_post_weekly:
                     lookback_days = current_season_lookback_days(season_year)
                     transactions = await mfl.fetch_transactions_trade_days(lookback_days)
                     await mfl.sleep_between_exports()
@@ -440,9 +451,14 @@ async def _async_main() -> int:
                         )
 
                     for report_title, report_description, report_color in weekly_report_payloads:
+                        report_key = weekly_report_dedupe_key(
+                            current_week_key, report_title
+                        )
+                        if report_key in seen:
+                            continue
                         pending_posts.append(
                             (
-                                f"WEEKLY_REPORT|{current_week_key}|{report_title}",
+                                report_key,
                                 TradeMessagePayload(
                                     report_title,
                                     report_description,
@@ -450,11 +466,9 @@ async def _async_main() -> int:
                                 ),
                             )
                         )
-                    _save_last_weekly_reports_week_key(reports_state_path, current_week_key)
-                    updated_reports_state = True
 
         if sunday_unpaid_report_enabled:
-            now_sun = datetime.now(ZoneInfo("America/New_York"))
+            now_sun = schedule_now_et
             if _is_sunday_unpaid_report_due(now_sun):
                 reports_state = _read_reports_state_json(reports_state_path)
                 today_et = now_sun.date().isoformat()
@@ -493,22 +507,24 @@ async def _async_main() -> int:
                     description = f"{as_of_line}\n\n{disclaimer}\n\n{body}"
                     if len(description) > 4096:
                         description = description[:4093] + "..."
-                    pending_posts.append(
-                        (
-                            f"SUNDAY_UNPAID|{today_et}",
-                            TradeMessagePayload(
-                                "Unpaid Owners / Traded Picks",
-                                description,
-                                15105570,
-                            ),
+                    sunday_key = f"SUNDAY_UNPAID|{today_et}"
+                    if sunday_key not in seen:
+                        pending_posts.append(
+                            (
+                                sunday_key,
+                                TradeMessagePayload(
+                                    "Unpaid Owners / Traded Picks",
+                                    description,
+                                    15105570,
+                                ),
+                            )
                         )
-                    )
                     reports_state["last_unpaid_owners_sunday_date_et"] = today_et
                     _write_reports_state_json(reports_state_path, reports_state)
                     updated_reports_state = True
 
         if rfa_report_enabled:
-            now_rfa = datetime.now(ZoneInfo("America/New_York"))
+            now_rfa = schedule_now_et
             as_of_rfa = f"As of {_as_of_label_et(now_rfa)}"
             rfa_state = load_rfa_state(rfa_state_path)
             await mfl.sleep_between_exports()
@@ -605,7 +621,7 @@ async def _async_main() -> int:
                 updated_rfa_state = True
 
         if taxi_cut_alerts_enabled or weekly_reports_include_taxi_cut_refunds:
-            now_taxi = datetime.now(ZoneInfo("America/New_York"))
+            now_taxi = schedule_now_et
             as_of_taxi = f"As of {_as_of_label_et(now_taxi)}"
             taxi_state = load_taxi_cut_state(taxi_cut_state_path)
             await mfl.sleep_between_exports()
