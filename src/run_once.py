@@ -70,6 +70,7 @@ from src.taxi_cut_report import (
     group_taxi_cuts_for_alerts,
     include_taxi_salary_percent,
     load_taxi_cut_state,
+    non_taxi_roster_players_from_rosters,
     parse_salary_adjustments,
     save_taxi_cut_state,
     taxi_cut_alert_fingerprint,
@@ -632,6 +633,7 @@ async def _async_main() -> int:
             await mfl.sleep_between_exports()
             rosters_json = await mfl.fetch_rosters()
             current_taxi = taxi_players_from_rosters(rosters_json)
+            non_taxi_roster = non_taxi_roster_players_from_rosters(rosters_json)
             await mfl.sleep_between_exports()
             fa_txs = await mfl.fetch_transactions_by_type(
                 "FREE_AGENT",
@@ -654,6 +656,7 @@ async def _async_main() -> int:
                 players_map=players,
                 taxi_percent=taxi_percent,
                 now_ts=int(time.time()),
+                non_taxi_roster_players=non_taxi_roster,
             )
 
             if taxi_cut_alerts_enabled:

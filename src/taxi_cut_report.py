@@ -110,6 +110,41 @@ def _empty_state() -> dict[str, Any]:
 def taxi_players_from_rosters(rosters_json: dict[str, Any]) -> dict[str, dict[str, str]]:
     """player_id -> {franchise_id, salary} for TAXI_SQUAD roster slots."""
     out: dict[str, dict[str, str]] = {}
+    for franchise_id_str, player in _iter_roster_players(rosters_json):
+        status = str(player.get("status") or "").strip().upper()
+        if "TAXI" not in status:
+            continue
+        player_id = player.get("id")
+        if player_id is None or str(player_id).strip() == "":
+            continue
+        salary = str(player.get("salary") or "").strip()
+        out[str(player_id)] = {
+            "franchise_id": franchise_id_str,
+            "salary": salary,
+        }
+    return out
+
+
+def non_taxi_roster_players_from_rosters(
+    rosters_json: dict[str, Any],
+) -> dict[str, str]:
+    """player_id -> franchise_id for active / IR (non-taxi) roster slots."""
+    out: dict[str, str] = {}
+    for franchise_id_str, player in _iter_roster_players(rosters_json):
+        status = str(player.get("status") or "").strip().upper()
+        if "TAXI" in status:
+            continue
+        player_id = player.get("id")
+        if player_id is None or str(player_id).strip() == "":
+            continue
+        out[str(player_id)] = franchise_id_str
+    return out
+
+
+def _iter_roster_players(
+    rosters_json: dict[str, Any],
+) -> list[tuple[str, dict[str, Any]]]:
+    out: list[tuple[str, dict[str, Any]]] = []
     block = rosters_json.get("rosters") or {}
     franchise_rows_raw = block.get("franchise")
     if isinstance(franchise_rows_raw, list):
@@ -131,17 +166,7 @@ def taxi_players_from_rosters(rosters_json: dict[str, Any]) -> dict[str, dict[st
         else:
             players = []
         for player in players:
-            status = str(player.get("status") or "").strip().upper()
-            if "TAXI" not in status:
-                continue
-            player_id = player.get("id")
-            if player_id is None or str(player_id).strip() == "":
-                continue
-            salary = str(player.get("salary") or "").strip()
-            out[str(player_id)] = {
-                "franchise_id": franchise_id_str,
-                "salary": salary,
-            }
+            out.append((franchise_id_str, player))
     return out
 
 
@@ -258,6 +283,7 @@ def update_taxi_cut_state(
     players_map: dict[str, str],
     taxi_percent: float | None,
     now_ts: int,
+    non_taxi_roster_players: dict[str, str] | None = None,
 ) -> tuple[dict[str, Any], list[TaxiCutEvent]]:
     """
     Refresh taxi history, detect new taxi cuts, apply refund matches.
@@ -266,6 +292,10 @@ def update_taxi_cut_state(
     - a matching negative salary adjustment appears on the franchise, or
     - the originating Dropped dead-money adjustment is no longer present
       (commish deleted the charge instead of posting a refund line).
+
+    Only players previously observed on this franchise's taxi squad are treated
+    as taxi cuts. Dead-money that merely *looks* like taxi % (common on cheap
+    active-roster cuts) is not enough on its own.
 
     Returns (updated_state, newly_detected_cuts_for_immediate_alerts).
     """
@@ -291,6 +321,17 @@ def update_taxi_cut_state(
             "salary": str(meta.get("salary") or ""),
             "last_seen_ts": now_ts,
         }
+
+    # Player moved taxi -> active/IR: clear history so a later active drop is
+    # not treated as a taxi cut.
+    if non_taxi_roster_players:
+        for player_id, franchise_id in non_taxi_roster_players.items():
+            seen_meta = taxi_seen.get(player_id)
+            if not seen_meta:
+                continue
+            if str(seen_meta.get("franchise_id") or "") != str(franchise_id):
+                continue
+            taxi_seen.pop(player_id, None)
 
     drops_by_franchise_player: dict[tuple[str, str], FreeAgentMove] = {}
     for move in free_agent_drops:
@@ -318,16 +359,10 @@ def update_taxi_cut_state(
             seen_meta
             and str(seen_meta.get("franchise_id") or "") == adj.franchise_id
         )
-        taxi_like = looks_like_taxi_dead_money(
-            dead_money=adj.amount,
-            salary=salary,
-            years_left=years_left,
-            taxi_percent=taxi_percent,
-        )
-        drop = drops_by_franchise_player.get((adj.franchise_id, player_id))
-        if not on_taxi_history and not (taxi_like and drop is not None):
+        if not on_taxi_history:
             continue
 
+        drop = drops_by_franchise_player.get((adj.franchise_id, player_id))
         cut_ts = adj.timestamp or (drop.timestamp if drop else 0)
         cut = TaxiCutEvent(
             player_id=player_id,

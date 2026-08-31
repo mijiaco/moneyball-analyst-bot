@@ -58,6 +58,7 @@ from src.taxi_cut_report import (
     format_taxi_cut_weekly_report_text,
     include_taxi_salary_percent,
     load_taxi_cut_state,
+    non_taxi_roster_players_from_rosters,
     parse_salary_adjustments,
     save_taxi_cut_state,
     taxi_players_from_rosters,
@@ -1812,6 +1813,7 @@ async def post_taxi_cut_refunds_embed_to_discord() -> int:
         players_map=players_map,
         taxi_percent=include_taxi_salary_percent(league_json),
         now_ts=int(time.time()),
+        non_taxi_roster_players=non_taxi_roster_players_from_rosters(rosters_json),
     )
     save_taxi_cut_state(taxi_cut_state_path, updated_state)
 

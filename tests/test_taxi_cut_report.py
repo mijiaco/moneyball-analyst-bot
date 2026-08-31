@@ -316,35 +316,38 @@ def test_update_keeps_pending_while_dropped_adjustment_still_present() -> None:
     assert len(unreimbursed_taxi_cuts(updated)) == 1
 
 
-def test_update_detects_moss_via_taxi_dead_money_heuristic() -> None:
+def test_update_skips_active_roster_drop_with_taxi_like_dead_money() -> None:
+    """Wilson-style false positive: IR->active then drop, never on taxi."""
     state = {
         "taxi_seen": {},
         "pending_cuts": [],
         "last_weekly_week_key": "",
-        "initialized": False,
+        "initialized": True,
     }
     adjustments = parse_salary_adjustments(
         {
             "salaryAdjustments": {
                 "salaryAdjustment": {
-                    "franchise_id": "0018",
-                    "timestamp": "1784839953",
-                    "amount": "1.6",
+                    "franchise_id": "0015",
+                    "timestamp": "1788132578",
+                    "amount": "0.8",
                     "description": (
-                        "Dropped Moss, Le'Veon MIA RB "
-                        "(Salary: $2.00, Original Contract: 3, Years Left: 3)"
+                        "Dropped Wilson, Cedrick FA WR "
+                        "(Salary: $1.00, Original Contract: 3, Years Left: 3)"
                     ),
                     "id": "0",
                 }
             }
         }
     )
-    players = {"17479": "Moss, Le'Veon MIA RB"}
+    assert looks_like_taxi_dead_money(
+        dead_money=0.8, salary=1.0, years_left=3, taxi_percent=25.0
+    )
     drops = [
         FreeAgentMove(
-            player_id="17479",
-            franchise_id="0018",
-            timestamp=1784839953,
+            player_id="13652",
+            franchise_id="0015",
+            timestamp=1788132578,
             is_add=False,
         )
     ]
@@ -353,13 +356,60 @@ def test_update_detects_moss_via_taxi_dead_money_heuristic() -> None:
         current_taxi_players={},
         free_agent_drops=drops,
         salary_adjustments=adjustments,
-        players_map=players,
+        players_map={"13652": "Wilson, Cedrick FA WR"},
         taxi_percent=25.0,
-        now_ts=1784840000,
+        now_ts=1788132600,
     )
-    assert len(new_cuts) == 1
-    assert new_cuts[0].player_id == "17479"
-    assert unreimbursed_taxi_cuts(updated)[0]["dead_money"] == 1.6
+    assert new_cuts == []
+    assert unreimbursed_taxi_cuts(updated) == []
+
+
+def test_update_clears_taxi_history_when_player_moves_to_active() -> None:
+    state = {
+        "taxi_seen": {
+            "13652": {"franchise_id": "0015", "salary": "1", "last_seen_ts": 100}
+        },
+        "pending_cuts": [],
+        "last_weekly_week_key": "",
+        "initialized": True,
+    }
+    adjustments = parse_salary_adjustments(
+        {
+            "salaryAdjustments": {
+                "salaryAdjustment": {
+                    "franchise_id": "0015",
+                    "timestamp": "200",
+                    "amount": "0.8",
+                    "description": (
+                        "Dropped Wilson, Cedrick FA WR "
+                        "(Salary: $1.00, Original Contract: 3, Years Left: 3)"
+                    ),
+                    "id": "0",
+                }
+            }
+        }
+    )
+    drops = [
+        FreeAgentMove(
+            player_id="13652",
+            franchise_id="0015",
+            timestamp=200,
+            is_add=False,
+        )
+    ]
+    updated, new_cuts = update_taxi_cut_state(
+        state,
+        current_taxi_players={},
+        free_agent_drops=drops,
+        salary_adjustments=adjustments,
+        players_map={"13652": "Wilson, Cedrick FA WR"},
+        taxi_percent=25.0,
+        now_ts=250,
+        non_taxi_roster_players={"13652": "0015"},
+    )
+    assert new_cuts == []
+    assert "13652" not in updated["taxi_seen"]
+    assert unreimbursed_taxi_cuts(updated) == []
 
 
 def test_formatters() -> None:
