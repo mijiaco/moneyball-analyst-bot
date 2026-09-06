@@ -27,6 +27,77 @@ _DROPPED_ADJ_RE = re.compile(
 
 
 @dataclass(frozen=True)
+class TaxiSquadMove:
+    """One player demotion to or promotion from the taxi squad."""
+
+    player_id: str
+    franchise_id: str
+    timestamp: int
+    is_demotion: bool
+
+
+def parse_taxi_squad_moves(transactions: list[dict[str, Any]]) -> list[TaxiSquadMove]:
+    """
+    TAXI transactions use ``demoted`` / ``promoted`` comma-separated player ids.
+    """
+    moves: list[TaxiSquadMove] = []
+    for row in transactions:
+        if str(row.get("type") or "").upper() != "TAXI":
+            continue
+        franchise_id = str(row.get("franchise") or "").strip()
+        if not franchise_id:
+            continue
+        ts = _as_int_ts(row.get("timestamp"))
+        for pid in str(row.get("demoted") or "").split(","):
+            player_id = pid.strip()
+            if not player_id:
+                continue
+            moves.append(
+                TaxiSquadMove(
+                    player_id=player_id,
+                    franchise_id=franchise_id,
+                    timestamp=ts,
+                    is_demotion=True,
+                )
+            )
+        for pid in str(row.get("promoted") or "").split(","):
+            player_id = pid.strip()
+            if not player_id:
+                continue
+            moves.append(
+                TaxiSquadMove(
+                    player_id=player_id,
+                    franchise_id=franchise_id,
+                    timestamp=ts,
+                    is_demotion=False,
+                )
+            )
+    moves.sort(key=lambda move: (move.timestamp, move.franchise_id, move.player_id))
+    return moves
+
+
+def was_on_taxi_at_timestamp(
+    taxi_moves: list[TaxiSquadMove],
+    *,
+    player_id: str,
+    franchise_id: str,
+    at_ts: int,
+) -> bool:
+    """
+    Replay taxi demote/promote history and return whether the player was on that
+    franchise's taxi squad immediately before ``at_ts``.
+    """
+    on_taxi = False
+    for move in taxi_moves:
+        if move.timestamp > at_ts:
+            break
+        if move.franchise_id != franchise_id or move.player_id != player_id:
+            continue
+        on_taxi = move.is_demotion
+    return on_taxi
+
+
+@dataclass(frozen=True)
 class SalaryAdjustment:
     franchise_id: str
     timestamp: int
@@ -284,6 +355,7 @@ def update_taxi_cut_state(
     taxi_percent: float | None,
     now_ts: int,
     non_taxi_roster_players: dict[str, str] | None = None,
+    taxi_squad_moves: list[TaxiSquadMove] | None = None,
 ) -> tuple[dict[str, Any], list[TaxiCutEvent]]:
     """
     Refresh taxi history, detect new taxi cuts, apply refund matches.
@@ -296,6 +368,10 @@ def update_taxi_cut_state(
     Only players previously observed on this franchise's taxi squad are treated
     as taxi cuts. Dead-money that merely *looks* like taxi % (common on cheap
     active-roster cuts) is not enough on its own.
+
+    When ``taxi_squad_moves`` is provided, unreimbursed pending cuts for players
+    who were not on taxi at drop time are invalidated (clears heuristic false
+    positives such as active-roster / IR drops).
 
     Returns (updated_state, newly_detected_cuts_for_immediate_alerts).
     """
@@ -332,6 +408,17 @@ def update_taxi_cut_state(
             if str(seen_meta.get("franchise_id") or "") != str(franchise_id):
                 continue
             taxi_seen.pop(player_id, None)
+
+    if taxi_squad_moves:
+        for move in taxi_squad_moves:
+            if move.is_demotion:
+                continue
+            seen_meta = taxi_seen.get(move.player_id)
+            if not seen_meta:
+                continue
+            if str(seen_meta.get("franchise_id") or "") != move.franchise_id:
+                continue
+            taxi_seen.pop(move.player_id, None)
 
     drops_by_franchise_player: dict[tuple[str, str], FreeAgentMove] = {}
     for move in free_agent_drops:
@@ -391,6 +478,26 @@ def update_taxi_cut_state(
         pending_keys.add(adj_key)
         new_cuts.append(cut)
         taxi_seen.pop(player_id, None)
+
+    if taxi_squad_moves:
+        for row in pending:
+            if row.get("refunded"):
+                continue
+            player_id = str(row.get("player_id") or "")
+            franchise_id = str(row.get("franchise_id") or "")
+            cut_ts = _as_int_ts(row.get("timestamp"))
+            if not player_id or not franchise_id:
+                continue
+            if was_on_taxi_at_timestamp(
+                taxi_squad_moves,
+                player_id=player_id,
+                franchise_id=franchise_id,
+                at_ts=cut_ts,
+            ):
+                continue
+            row["refunded"] = True
+            row["refund_ts"] = now_ts
+            row["invalidated_not_taxi"] = True
 
     refund_candidates = sorted(
         [adj for adj in salary_adjustments if adj.amount < 0],

@@ -77,6 +77,7 @@ from src.taxi_cut_report import (
     taxi_players_from_rosters,
     unreimbursed_taxi_cuts,
     update_taxi_cut_state,
+    parse_taxi_squad_moves,
 )
 from src.trade_notify import (
     cap_space_available_by_franchise,
@@ -640,6 +641,15 @@ async def _async_main() -> int:
                 days=taxi_cut_lookback_days,
             )
             await mfl.sleep_between_exports()
+            taxi_history_days = max(
+                taxi_cut_lookback_days,
+                current_season_lookback_days(season_year),
+            )
+            taxi_txs = await mfl.fetch_transactions_by_type(
+                "TAXI",
+                days=taxi_history_days,
+            )
+            await mfl.sleep_between_exports()
             adjustments_json = await mfl.fetch_salary_adjustments()
             await mfl.sleep_between_exports()
             players = await mfl.get_players_map()
@@ -657,6 +667,7 @@ async def _async_main() -> int:
                 taxi_percent=taxi_percent,
                 now_ts=int(time.time()),
                 non_taxi_roster_players=non_taxi_roster,
+                taxi_squad_moves=parse_taxi_squad_moves(taxi_txs),
             )
 
             if taxi_cut_alerts_enabled:

@@ -412,6 +412,109 @@ def test_update_clears_taxi_history_when_player_moves_to_active() -> None:
     assert unreimbursed_taxi_cuts(updated) == []
 
 
+def test_update_invalidates_pending_active_drop_using_taxi_history() -> None:
+    """Wilson stays pending until TAXI history proves he was never on taxi."""
+    wilson_key = (
+        "1788132578|0015|0.80|Dropped Wilson, Cedrick FA WR "
+        "(Salary: $1.00, Original Contract: 3, Years Left: 3)"
+    )
+    owens_key = (
+        "1788531672|0004|3.20|Dropped Owens, Kejon FA RB "
+        "(Salary: $4.00, Original Contract: 3, Years Left: 3)"
+    )
+    state = {
+        "taxi_seen": {},
+        "pending_cuts": [
+            {
+                "player_id": "13652",
+                "franchise_id": "0015",
+                "timestamp": 1788132578,
+                "dead_money": 0.8,
+                "salary": 1.0,
+                "years_left": 3,
+                "player_label": "Wilson, Cedrick FA WR",
+                "adjustment_key": wilson_key,
+                "refunded": False,
+                "refund_ts": 0,
+            },
+            {
+                "player_id": "17708",
+                "franchise_id": "0004",
+                "timestamp": 1788531672,
+                "dead_money": 3.2,
+                "salary": 4.0,
+                "years_left": 3,
+                "player_label": "Owens, Kejon FA RB",
+                "adjustment_key": owens_key,
+                "refunded": False,
+                "refund_ts": 0,
+            },
+        ],
+        "last_weekly_week_key": "",
+        "initialized": True,
+    }
+    adjustments = parse_salary_adjustments(
+        {
+            "salaryAdjustments": {
+                "salaryAdjustment": [
+                    {
+                        "franchise_id": "0015",
+                        "timestamp": "1788132578",
+                        "amount": "0.8",
+                        "description": (
+                            "Dropped Wilson, Cedrick FA WR "
+                            "(Salary: $1.00, Original Contract: 3, Years Left: 3)"
+                        ),
+                        "id": "7",
+                    },
+                    {
+                        "franchise_id": "0004",
+                        "timestamp": "1788531672",
+                        "amount": "3.2",
+                        "description": (
+                            "Dropped Owens, Kejon FA RB "
+                            "(Salary: $4.00, Original Contract: 3, Years Left: 3)"
+                        ),
+                        "id": "13",
+                    },
+                ]
+            }
+        }
+    )
+    from src.taxi_cut_report import TaxiSquadMove
+
+    taxi_moves = [
+        TaxiSquadMove(
+            player_id="17708",
+            franchise_id="0004",
+            timestamp=1780255946,
+            is_demotion=True,
+        )
+    ]
+    updated, new_cuts = update_taxi_cut_state(
+        state,
+        current_taxi_players={},
+        free_agent_drops=[],
+        salary_adjustments=adjustments,
+        players_map={
+            "13652": "Wilson, Cedrick FA WR",
+            "17708": "Owens, Kejon FA RB",
+        },
+        taxi_percent=25.0,
+        now_ts=1788650000,
+        taxi_squad_moves=taxi_moves,
+    )
+    assert new_cuts == []
+    pending = unreimbursed_taxi_cuts(updated)
+    assert len(pending) == 1
+    assert pending[0]["player_id"] == "17708"
+    wilson = next(
+        row for row in updated["pending_cuts"] if row["player_id"] == "13652"
+    )
+    assert wilson["refunded"] is True
+    assert wilson.get("invalidated_not_taxi") is True
+
+
 def test_formatters() -> None:
     from src.taxi_cut_report import TaxiCutEvent
 

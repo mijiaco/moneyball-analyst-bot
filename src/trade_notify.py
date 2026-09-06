@@ -60,6 +60,7 @@ from src.taxi_cut_report import (
     load_taxi_cut_state,
     non_taxi_roster_players_from_rosters,
     parse_salary_adjustments,
+    parse_taxi_squad_moves,
     save_taxi_cut_state,
     taxi_players_from_rosters,
     unreimbursed_taxi_cuts,
@@ -1776,6 +1777,8 @@ async def post_taxi_cut_refunds_embed_to_discord() -> int:
     api_key = os.environ.get("MFL_API_KEY") or None
     user_agent = os.environ.get("MFL_USER_AGENT") or None
     lookback = int(os.environ.get("MFL_TAXI_CUT_LOOKBACK_DAYS") or os.environ.get("MFL_TRADE_LOOKBACK_DAYS", "14"))
+    season_year = int(year)
+    taxi_history_days = max(lookback, current_season_lookback_days(season_year))
     data_dir = Path(__file__).resolve().parent.parent / "data"
     players_cache = data_dir / "players_cache.json"
     taxi_cut_state_path = data_dir / "taxi_cut_state.json"
@@ -1794,6 +1797,10 @@ async def post_taxi_cut_refunds_embed_to_discord() -> int:
         rosters_json = await client.fetch_rosters()
         await client.sleep_between_exports()
         fa_txs = await client.fetch_transactions_by_type("FREE_AGENT", days=lookback)
+        await client.sleep_between_exports()
+        taxi_txs = await client.fetch_transactions_by_type(
+            "TAXI", days=taxi_history_days
+        )
         await client.sleep_between_exports()
         adjustments_json = await client.fetch_salary_adjustments()
         await client.sleep_between_exports()
@@ -1814,6 +1821,7 @@ async def post_taxi_cut_refunds_embed_to_discord() -> int:
         taxi_percent=include_taxi_salary_percent(league_json),
         now_ts=int(time.time()),
         non_taxi_roster_players=non_taxi_roster_players_from_rosters(rosters_json),
+        taxi_squad_moves=parse_taxi_squad_moves(taxi_txs),
     )
     save_taxi_cut_state(taxi_cut_state_path, updated_state)
 
