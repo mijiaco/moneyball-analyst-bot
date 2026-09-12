@@ -7,7 +7,8 @@ Instructions for AI assistants and developers working in this repository.
 - Polls a **MyFantasyLeague (MFL)** league via JSON **export** HTTP APIs.
 - Posts **Discord** messages (embeds) for **trades** and optional **trade bait** updates.
 - Posts optional **Restricted Free Agent (RFA)** report embeds (list changes + Saturday weekly) and **invalid RFA claim** alerts; syncs the active RFA list to Google Sheets.
-- Posts optional Saturday weekly embeds (Top Traders, draft picks, roster breakdown, **roster violations**, **taxi-cut cap refunds pending**).
+- Posts optional Saturday weekly embeds (Top Traders, draft picks, roster breakdown, **taxi-cut cap refunds pending**).
+- Posts optional **daily Roster Violations** embeds (3:00 PM ET).
 - Posts immediate **taxi squad cut** alerts when a taxi player is dropped and dead-money hits the cap (commish refund needed).
 - Persists **dedupe state** in `data/seen_trades.json`, optional weekly report cursor in `data/reports_state.json`, and RFA state in `data/rfa_state.json` so repeats are not announced.
 - **Primary runtime:** GitHub Actions workflow `scheduled-export` running `python -m src.run_once` (no long-lived server required).
@@ -76,7 +77,7 @@ Share the spreadsheet with the service account email (Editor).
 - `MFL_RFA_REPORT_ENABLED` — default true
 - `MFL_RFA_INVALID_CLAIM_ALERTS_ENABLED` — default true
 - `MFL_RFA_LOOKBACK_DAYS` — defaults to `MFL_TRADE_LOOKBACK_DAYS`
-- `MFL_WEEKLY_REPORTS_INCLUDE_ROSTER_VIOLATIONS` — default true (Saturday weekly batch)
+- `MFL_DAILY_ROSTER_VIOLATIONS_ENABLED` — default true (daily 3:00 PM ET; falls back to legacy `MFL_WEEKLY_REPORTS_INCLUDE_ROSTER_VIOLATIONS` when unset)
 - `MFL_WEEKLY_REPORTS_INCLUDE_TAXI_CUT_REFUNDS` — default true (Saturday list of unreimbursed taxi-cut dead money)
 - `MFL_TAXI_CUT_ALERTS_ENABLED` — default true (immediate Discord alert on taxi cut)
 - `MFL_TAXI_CUT_LOOKBACK_DAYS` — defaults to `MFL_TRADE_LOOKBACK_DAYS`

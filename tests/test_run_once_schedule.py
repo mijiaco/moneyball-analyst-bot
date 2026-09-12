@@ -36,6 +36,25 @@ def test_weekly_reports_due_saturday_after_1500(
 @pytest.mark.parametrize(
     "when, hour, minute, expected",
     [
+        ("2026-04-18", 14, 59, False),  # Sat before window
+        ("2026-04-18", 15, 0, True),
+        ("2026-04-19", 15, 0, True),  # Sun
+        ("2026-04-14", 14, 59, False),  # Tue before
+        ("2026-04-14", 15, 0, True),  # Tue at window
+        ("2026-04-14", 18, 0, True),
+    ],
+)
+def test_daily_roster_violations_due_after_1500(
+    when: str, hour: int, minute: int, expected: bool
+) -> None:
+    y, m, d = (int(p) for p in when.split("-"))
+    now_et = datetime(y, m, d, hour, minute, tzinfo=ET)
+    assert ro._is_daily_roster_violations_due(now_et) is expected
+
+
+@pytest.mark.parametrize(
+    "when, hour, minute, expected",
+    [
         ("2026-04-19", 12, 59, False),  # Sun before 1:00 PM
         ("2026-04-19", 13, 0, True),
         ("2026-04-19", 18, 0, True),

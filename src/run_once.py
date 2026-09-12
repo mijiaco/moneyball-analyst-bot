@@ -175,6 +175,11 @@ def _is_weekly_reports_due(now_et: datetime) -> bool:
     return now_et.weekday() == 5 and now_et.hour >= 15
 
 
+def _is_daily_roster_violations_due(now_et: datetime) -> bool:
+    # Every day at/after 3:00 PM Eastern Time
+    return now_et.hour >= 15
+
+
 def _is_sunday_unpaid_report_due(now_et: datetime) -> bool:
     # Sunday at/after 1:00 PM Eastern Time
     return now_et.weekday() == 6 and now_et.hour >= 13
@@ -251,8 +256,9 @@ async def _async_main() -> int:
     weekly_reports_include_roster_breakdown = env_bool(
         "MFL_WEEKLY_REPORTS_INCLUDE_ROSTER_BREAKDOWN", True
     )
-    weekly_reports_include_roster_violations = env_bool(
-        "MFL_WEEKLY_REPORTS_INCLUDE_ROSTER_VIOLATIONS", True
+    daily_roster_violations_enabled = env_bool(
+        "MFL_DAILY_ROSTER_VIOLATIONS_ENABLED",
+        env_bool("MFL_WEEKLY_REPORTS_INCLUDE_ROSTER_VIOLATIONS", True),
     )
     weekly_reports_include_taxi_cut_refunds = env_bool(
         "MFL_WEEKLY_REPORTS_INCLUDE_TAXI_CUT_REFUNDS", True
@@ -370,16 +376,9 @@ async def _async_main() -> int:
                                 (chunk_title, chunk_with_as_of, 5793266)
                             )
 
-                    rosters_json: dict[str, Any] | None = None
-                    if (
-                        weekly_reports_include_roster_breakdown
-                        or weekly_reports_include_roster_violations
-                    ):
+                    if weekly_reports_include_roster_breakdown:
                         await mfl.sleep_between_exports()
                         rosters_json = await mfl.fetch_rosters()
-
-                    if weekly_reports_include_roster_breakdown:
-                        assert rosters_json is not None
                         roster_report = format_roster_breakdown_report_text(
                             franchise_names,
                             roster_slot_counts_by_franchise(rosters_json),
@@ -403,56 +402,6 @@ async def _async_main() -> int:
                             )
                         )
 
-                    if weekly_reports_include_roster_violations:
-                        assert rosters_json is not None
-                        await mfl.sleep_between_exports()
-                        injuries_json = await mfl.fetch_injuries()
-                        await mfl.sleep_between_exports()
-                        standings_json = await mfl.fetch_league_standings()
-                        await mfl.sleep_between_exports()
-                        players_map = await mfl.get_players_map()
-                        slot_limits = league_slot_limits(league_json)
-                        violations_report = format_roster_violations_report_text(
-                            franchise_names,
-                            find_ir_eligibility_violations(
-                                rosters_json,
-                                injury_status_by_player_id(injuries_json),
-                                players_map,
-                                eligible_statuses=ir_eligible_statuses_from_env(),
-                            ),
-                            find_slot_limit_violations(
-                                rosters_json,
-                                roster_limit=slot_limits["roster"],
-                                taxi_limit=slot_limits["taxi"],
-                                ir_limit=slot_limits["ir"],
-                            ),
-                            salary_cap_violations=find_salary_cap_violations(
-                                franchise_salaries_from_standings(standings_json),
-                                franchise_salary_caps_from_league(league_json),
-                            ),
-                            starter_requirement_violations=find_starter_requirement_violations(
-                                rosters_json,
-                                players_map,
-                                position_minimums=starter_position_minimums(league_json),
-                                lineup_size=starter_lineup_size(league_json),
-                            ),
-                        )
-                        violations_description = (
-                            f"{as_of_line}\n\n"
-                            + (
-                                violations_report.split("\n\n", 1)[1]
-                                if "\n\n" in violations_report
-                                else violations_report
-                            )
-                        )
-                        weekly_report_payloads.append(
-                            (
-                                ROSTER_VIOLATIONS_TITLE,
-                                violations_description,
-                                ROSTER_VIOLATIONS_COLOR,
-                            )
-                        )
-
                     for report_title, report_description, report_color in weekly_report_payloads:
                         report_key = weekly_report_dedupe_key(
                             current_week_key, report_title
@@ -469,6 +418,74 @@ async def _async_main() -> int:
                                 ),
                             )
                         )
+
+        if daily_roster_violations_enabled:
+            now_violations = schedule_now_et
+            if _is_daily_roster_violations_due(now_violations):
+                reports_state = _read_reports_state_json(reports_state_path)
+                today_et = now_violations.date().isoformat()
+                if reports_state.get("last_roster_violations_date_et") != today_et:
+                    as_of_line = f"As of {_as_of_label_et(now_violations)}"
+                    await mfl.sleep_between_exports()
+                    league_json = await mfl.fetch_league()
+                    franchise_names = franchise_names_from_league(league_json)
+                    await mfl.sleep_between_exports()
+                    rosters_json = await mfl.fetch_rosters()
+                    await mfl.sleep_between_exports()
+                    injuries_json = await mfl.fetch_injuries()
+                    await mfl.sleep_between_exports()
+                    standings_json = await mfl.fetch_league_standings()
+                    await mfl.sleep_between_exports()
+                    players_map = await mfl.get_players_map()
+                    slot_limits = league_slot_limits(league_json)
+                    violations_report = format_roster_violations_report_text(
+                        franchise_names,
+                        find_ir_eligibility_violations(
+                            rosters_json,
+                            injury_status_by_player_id(injuries_json),
+                            players_map,
+                            eligible_statuses=ir_eligible_statuses_from_env(),
+                        ),
+                        find_slot_limit_violations(
+                            rosters_json,
+                            roster_limit=slot_limits["roster"],
+                            taxi_limit=slot_limits["taxi"],
+                            ir_limit=slot_limits["ir"],
+                        ),
+                        salary_cap_violations=find_salary_cap_violations(
+                            franchise_salaries_from_standings(standings_json),
+                            franchise_salary_caps_from_league(league_json),
+                        ),
+                        starter_requirement_violations=find_starter_requirement_violations(
+                            rosters_json,
+                            players_map,
+                            position_minimums=starter_position_minimums(league_json),
+                            lineup_size=starter_lineup_size(league_json),
+                        ),
+                    )
+                    violations_description = (
+                        f"{as_of_line}\n\n"
+                        + (
+                            violations_report.split("\n\n", 1)[1]
+                            if "\n\n" in violations_report
+                            else violations_report
+                        )
+                    )
+                    report_key = f"DAILY_ROSTER_VIOLATIONS|{today_et}"
+                    if report_key not in seen:
+                        pending_posts.append(
+                            (
+                                report_key,
+                                TradeMessagePayload(
+                                    ROSTER_VIOLATIONS_TITLE,
+                                    violations_description,
+                                    ROSTER_VIOLATIONS_COLOR,
+                                ),
+                            )
+                        )
+                    reports_state["last_roster_violations_date_et"] = today_et
+                    _write_reports_state_json(reports_state_path, reports_state)
+                    updated_reports_state = True
 
         if sunday_unpaid_report_enabled:
             now_sun = schedule_now_et
