@@ -8,7 +8,8 @@ Instructions for AI assistants and developers working in this repository.
 - Posts **Discord** messages (embeds) for **trades** and optional **trade bait** updates.
 - Posts optional **Restricted Free Agent (RFA)** report embeds (list changes + Saturday weekly) and **invalid RFA claim** alerts; syncs the active RFA list to Google Sheets.
 - Posts optional Saturday weekly embeds (Top Traders, draft picks, roster breakdown, **taxi-cut cap refunds pending**).
-- Posts optional **daily Roster Violations** embeds (3:00 PM ET).
+- Posts optional **Roster Violations** embeds on Thu/Sun/Mon ET slots (Thu/Mon 7:30 PM; Sun 12:15 / 3:30 / 7:30 PM).
+- Posts optional Sunday **Active Roster: Can Be Demoted** embed (11:00 AM ET) when enabled; default off — use local dry-run preview.
 - Posts immediate **taxi squad cut** alerts when a taxi player is dropped and dead-money hits the cap (commish refund needed).
 - Persists **dedupe state** in `data/seen_trades.json`, optional weekly report cursor in `data/reports_state.json`, and RFA state in `data/rfa_state.json` so repeats are not announced.
 - **Primary runtime:** GitHub Actions workflow `scheduled-export` running `python -m src.run_once` (no long-lived server required).
@@ -29,7 +30,7 @@ Do **not** commit secrets, `.env`, or API keys. Never overwrite `.env` without e
 | `src/mfl_env.py` | Requires `MFL_HOST`, `MFL_YEAR`, `MFL_LEAGUE_ID` from env (no baked-in league defaults). |
 | `src/rfa_state.py` | RFA roster-diff state machine; FREE_AGENT / BBID_WAIVER parsers. |
 | `src/rfa_report.py` | RFA Discord formatters (and re-exports from `rfa_state`). |
-| `src/roster_violations.py` | IR eligibility, roster/taxi/IR slot limits, salary cap, and starter-depth violation detection/formatting. |
+| `src/roster_violations.py` | IR eligibility, roster/taxi/IR slot limits, salary cap, starter-depth violations, and Active Roster: Can Be Demoted formatting. |
 | `src/taxi_cut_report.py` | Taxi-squad cut dead-money detection, refund matching, immediate + weekly Discord formatters. |
 | `src/google_sheets.py` | Service-account Sheets read (top 32) + write (RFA tab). |
 | `src/bot.py` | Optional Discord.py bot. |
@@ -77,7 +78,8 @@ Share the spreadsheet with the service account email (Editor).
 - `MFL_RFA_REPORT_ENABLED` — default true
 - `MFL_RFA_INVALID_CLAIM_ALERTS_ENABLED` — default true
 - `MFL_RFA_LOOKBACK_DAYS` — defaults to `MFL_TRADE_LOOKBACK_DAYS`
-- `MFL_DAILY_ROSTER_VIOLATIONS_ENABLED` — default true (daily 3:00 PM ET; falls back to legacy `MFL_WEEKLY_REPORTS_INCLUDE_ROSTER_VIOLATIONS` when unset)
+- `MFL_DAILY_ROSTER_VIOLATIONS_ENABLED` — default true (Thu/Sun/Mon slot times ET; falls back to legacy `MFL_WEEKLY_REPORTS_INCLUDE_ROSTER_VIOLATIONS` when unset)
+- `MFL_SUNDAY_ACTIVE_ROSTER_DEMOTE_REPORT_ENABLED` — default false (Sunday 11:00 AM ET Active Roster: Can Be Demoted; keep off for public Discord; local preview via `python -m src.trade_notify --dry-run --active-roster-demote-report`)
 - `MFL_WEEKLY_REPORTS_INCLUDE_TAXI_CUT_REFUNDS` — default true (Saturday list of unreimbursed taxi-cut dead money)
 - `MFL_TAXI_CUT_ALERTS_ENABLED` — default true (immediate Discord alert on taxi cut)
 - `MFL_TAXI_CUT_LOOKBACK_DAYS` — defaults to `MFL_TRADE_LOOKBACK_DAYS`
@@ -207,7 +209,7 @@ python3 -m src.bot                   # optional; needs env
 6. **Invalid RFA claim alerts** — triggered when an RFA player is claimed with winning bid / new roster salary below last cut salary (`BBID_WAIVER` bid when present, else roster salary after add).
 
 7. **Taxi-cut refund still listed after commish cleared cap** — refund matching accepts a franchise **−$amount** adjustment equal to dead money, **or** removal of the originating `Dropped …` salary adjustment. Deleting the charge (with no negative line) should clear `pending_cuts` on the next poll.
-7. **Roster violations / injuries** — `TYPE=injuries` must use **`api.myfantasyleague.com`** (league host returns an error). IR eligibility defaults exclude Questionable; override with `MFL_IR_ELIGIBLE_STATUSES` if the league’s IR setup is broader/narrower. Salary-cap checks use `leagueStandings.salary` vs franchise `salaryCapAmount`. Starting-roster checks compare active (non-IR/taxi) depth to `league.starters` minimums.
+7. **Roster violations / injuries** — `TYPE=injuries` must use **`api.myfantasyleague.com`** (league host returns an error). Roster Violations posts on Thu/Sun/Mon ET slots (not daily 3pm) and does not list active-roster IR/Suspended players. **Active Roster: Can Be Demoted** is built for Sundays at 11:00 AM ET but defaults off (`MFL_SUNDAY_ACTIVE_ROSTER_DEMOTE_REPORT_ENABLED`); preview locally with `--active-roster-demote-report`. IR eligibility defaults exclude Questionable; override with `MFL_IR_ELIGIBLE_STATUSES` if the league’s IR setup is broader/narrower. Salary-cap checks use `leagueStandings.salary` vs franchise `salaryCapAmount`. Starting-roster checks compare active (non-IR/taxi) depth to `league.starters` minimums.
 
 ---
 

@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 from src.roster_violations import (
+    ActiveIrSuspendedPlayer,
     IrEligibilityViolation,
     SalaryCapViolation,
     SlotLimitViolation,
     StarterRequirementViolation,
+    find_active_roster_ir_suspended,
     find_ir_eligibility_violations,
     find_salary_cap_violations,
     find_slot_limit_violations,
     find_starter_requirement_violations,
+    format_active_roster_can_be_demoted_report_text,
     format_roster_violations_report_text,
     franchise_salaries_from_standings,
     franchise_salary_caps_from_league,
@@ -245,3 +248,86 @@ def test_format_roster_violations_report_text_groups_by_team() -> None:
 def test_format_roster_violations_report_text_none_found() -> None:
     text = format_roster_violations_report_text({}, [], [])
     assert text == "Roster Violations\n\nNo roster violations found."
+
+
+def test_find_active_roster_ir_suspended_includes_active_excludes_taxi_and_fantasy_ir() -> None:
+    rosters = {
+        "rosters": {
+            "franchise": [
+                {
+                    "id": "0001",
+                    "player": [
+                        {"id": "15239", "status": "ROSTER"},  # Pacheco IR
+                        {"id": "17348", "status": "ROSTER"},  # Pearce Suspended
+                        {"id": "99901", "status": "TAXI_SQUAD"},  # IR but taxi
+                        {"id": "99902", "status": "INJURED_RESERVE"},  # fantasy IR
+                        {"id": "99903", "status": "ROSTER"},  # Questionable — skip
+                    ],
+                }
+            ]
+        }
+    }
+    injuries = {
+        "15239": {"status": "IR", "details": "Back"},
+        "17348": {"status": "Suspended", "details": ""},
+        "99901": {"status": "IR", "details": "Knee"},
+        "99902": {"status": "IR-PUP", "details": "Achilles"},
+        "99903": {"status": "Questionable", "details": "Ankle"},
+    }
+    players = {
+        "15239": "Pacheco, Isiah DET RB",
+        "17348": "Pearce, James ATL DE",
+        "99901": "Taxi, Player FA RB",
+        "99902": "FantasyIr, Player FA WR",
+        "99903": "Q, Player FA TE",
+    }
+    rows = find_active_roster_ir_suspended(rosters, injuries, players)
+    assert [(r.player_id, r.injury_status) for r in rows] == [
+        ("15239", "IR"),
+        ("17348", "Suspended"),
+    ]
+
+
+def test_format_active_roster_can_be_demoted_report_text() -> None:
+    text = format_active_roster_can_be_demoted_report_text(
+        {"0001": "Bad Connection"},
+        [
+            ActiveIrSuspendedPlayer(
+                franchise_id="0001",
+                player_id="15239",
+                player_label="Pacheco, Isiah DET RB",
+                injury_status="IR",
+                injury_details="Back",
+            )
+        ],
+    )
+    assert text.startswith("Active Roster: Can Be Demoted")
+    assert "**Bad Connection**" in text
+    assert "* Pacheco, Isiah DET RB — IR (Back)" in text
+    assert "Roster Violations" not in text
+
+
+def test_format_active_roster_can_be_demoted_report_text_empty() -> None:
+    text = format_active_roster_can_be_demoted_report_text({}, [])
+    assert text == (
+        "Active Roster: Can Be Demoted\n\n"
+        "No active-roster players currently eligible to demote."
+    )
+
+
+def test_format_roster_violations_report_text_does_not_include_active_callout() -> None:
+    text = format_roster_violations_report_text(
+        {"0020": "California Cowboys"},
+        [
+            IrEligibilityViolation(
+                franchise_id="0020",
+                player_id="1",
+                player_label="One, Player FA RB",
+                injury_status="Questionable",
+                injury_details="",
+            )
+        ],
+        [],
+    )
+    assert "Active roster" not in text
+    assert "Can Be Demoted" not in text

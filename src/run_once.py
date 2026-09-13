@@ -45,12 +45,16 @@ from src.rfa_report import (
     update_rfa_state,
 )
 from src.roster_violations import (
+    ACTIVE_ROSTER_CAN_BE_DEMOTED_COLOR,
+    ACTIVE_ROSTER_CAN_BE_DEMOTED_TITLE,
     ROSTER_VIOLATIONS_COLOR,
     ROSTER_VIOLATIONS_TITLE,
+    find_active_roster_ir_suspended,
     find_ir_eligibility_violations,
     find_salary_cap_violations,
     find_slot_limit_violations,
     find_starter_requirement_violations,
+    format_active_roster_can_be_demoted_report_text,
     format_roster_violations_report_text,
     franchise_salaries_from_standings,
     franchise_salary_caps_from_league,
@@ -175,14 +179,52 @@ def _is_weekly_reports_due(now_et: datetime) -> bool:
     return now_et.weekday() == 5 and now_et.hour >= 15
 
 
-def _is_daily_roster_violations_due(now_et: datetime) -> bool:
-    # Every day at/after 3:00 PM Eastern Time
-    return now_et.hour >= 15
+# weekday(): Mon=0 ... Sun=6
+_ROSTER_VIOLATIONS_SLOTS_BY_WEEKDAY: dict[int, tuple[tuple[int, int], ...]] = {
+    0: ((19, 30),),  # Monday 7:30 PM ET
+    3: ((19, 30),),  # Thursday 7:30 PM ET
+    6: ((12, 15), (15, 30), (19, 30)),  # Sunday 12:15 / 3:30 / 7:30 PM ET
+}
+
+
+def _roster_violations_slot_key(date_et: str, hour: int, minute: int) -> str:
+    return f"{date_et}|{hour:02d}:{minute:02d}"
+
+
+def _open_roster_violations_slot_keys(now_et: datetime) -> list[str]:
+    """Return today's slot keys whose ET time has already been reached."""
+    slots = _ROSTER_VIOLATIONS_SLOTS_BY_WEEKDAY.get(now_et.weekday(), ())
+    if not slots:
+        return []
+    today = now_et.date().isoformat()
+    now_hm = (now_et.hour, now_et.minute)
+    return [
+        _roster_violations_slot_key(today, hour, minute)
+        for hour, minute in slots
+        if now_hm >= (hour, minute)
+    ]
+
+
+def _posted_roster_violations_slots(state: dict[str, Any]) -> set[str]:
+    raw = state.get("last_roster_violations_slots")
+    if isinstance(raw, list):
+        return {str(item) for item in raw if str(item).strip()}
+    legacy = str(state.get("last_roster_violations_date_et") or "").strip()
+    if legacy:
+        # Migrate one-per-day cursor into a synthetic slot so we do not double-post
+        # the same calendar day after upgrading to multi-slot Sundays.
+        return {f"{legacy}|15:00"}
+    return set()
 
 
 def _is_sunday_unpaid_report_due(now_et: datetime) -> bool:
     # Sunday at/after 1:00 PM Eastern Time
     return now_et.weekday() == 6 and now_et.hour >= 13
+
+
+def _is_sunday_active_roster_demote_report_due(now_et: datetime) -> bool:
+    # Sunday at/after 11:00 AM Eastern Time
+    return now_et.weekday() == 6 and now_et.hour >= 11
 
 
 def _as_of_label_et(now_et: datetime) -> str:
@@ -264,6 +306,9 @@ async def _async_main() -> int:
         "MFL_WEEKLY_REPORTS_INCLUDE_TAXI_CUT_REFUNDS", True
     )
     sunday_unpaid_report_enabled = env_bool("MFL_SUNDAY_UNPAID_REPORT_ENABLED", True)
+    sunday_active_roster_demote_report_enabled = env_bool(
+        "MFL_SUNDAY_ACTIVE_ROSTER_DEMOTE_REPORT_ENABLED", False
+    )
     rfa_report_enabled = env_bool("MFL_RFA_REPORT_ENABLED", True)
     rfa_invalid_claim_alerts_enabled = env_bool(
         "MFL_RFA_INVALID_CLAIM_ALERTS_ENABLED", True
@@ -421,10 +466,12 @@ async def _async_main() -> int:
 
         if daily_roster_violations_enabled:
             now_violations = schedule_now_et
-            if _is_daily_roster_violations_due(now_violations):
+            open_slots = _open_roster_violations_slot_keys(now_violations)
+            if open_slots:
                 reports_state = _read_reports_state_json(reports_state_path)
-                today_et = now_violations.date().isoformat()
-                if reports_state.get("last_roster_violations_date_et") != today_et:
+                posted_slots = _posted_roster_violations_slots(reports_state)
+                due_slots = [slot for slot in open_slots if slot not in posted_slots]
+                if due_slots:
                     as_of_line = f"As of {_as_of_label_et(now_violations)}"
                     await mfl.sleep_between_exports()
                     league_json = await mfl.fetch_league()
@@ -437,12 +484,13 @@ async def _async_main() -> int:
                     standings_json = await mfl.fetch_league_standings()
                     await mfl.sleep_between_exports()
                     players_map = await mfl.get_players_map()
+                    injuries_by_id = injury_status_by_player_id(injuries_json)
                     slot_limits = league_slot_limits(league_json)
                     violations_report = format_roster_violations_report_text(
                         franchise_names,
                         find_ir_eligibility_violations(
                             rosters_json,
-                            injury_status_by_player_id(injuries_json),
+                            injuries_by_id,
                             players_map,
                             eligible_statuses=ir_eligible_statuses_from_env(),
                         ),
@@ -471,19 +519,85 @@ async def _async_main() -> int:
                             else violations_report
                         )
                     )
-                    report_key = f"DAILY_ROSTER_VIOLATIONS|{today_et}"
-                    if report_key not in seen:
+                    for slot_key in due_slots:
+                        report_key = f"ROSTER_VIOLATIONS|{slot_key}"
+                        if report_key not in seen:
+                            pending_posts.append(
+                                (
+                                    report_key,
+                                    TradeMessagePayload(
+                                        ROSTER_VIOLATIONS_TITLE,
+                                        violations_description,
+                                        ROSTER_VIOLATIONS_COLOR,
+                                    ),
+                                )
+                            )
+                        posted_slots.add(slot_key)
+                    today = now_violations.date()
+                    retained: list[str] = []
+                    for key in sorted(posted_slots):
+                        date_part = key.split("|", 1)[0]
+                        try:
+                            key_date = datetime.strptime(date_part, "%Y-%m-%d").date()
+                        except ValueError:
+                            continue
+                        if (today - key_date).days <= 14:
+                            retained.append(key)
+                    reports_state["last_roster_violations_slots"] = retained
+                    reports_state.pop("last_roster_violations_date_et", None)
+                    _write_reports_state_json(reports_state_path, reports_state)
+                    updated_reports_state = True
+
+        if sunday_active_roster_demote_report_enabled:
+            now_demote = schedule_now_et
+            if _is_sunday_active_roster_demote_report_due(now_demote):
+                reports_state = _read_reports_state_json(reports_state_path)
+                today_et = now_demote.date().isoformat()
+                if (
+                    reports_state.get("last_active_roster_demote_sunday_date_et")
+                    != today_et
+                ):
+                    as_of_line = f"As of {_as_of_label_et(now_demote)}"
+                    await mfl.sleep_between_exports()
+                    league_json = await mfl.fetch_league()
+                    franchise_names = franchise_names_from_league(league_json)
+                    await mfl.sleep_between_exports()
+                    rosters_json = await mfl.fetch_rosters()
+                    await mfl.sleep_between_exports()
+                    injuries_json = await mfl.fetch_injuries()
+                    await mfl.sleep_between_exports()
+                    players_map = await mfl.get_players_map()
+                    demote_report = format_active_roster_can_be_demoted_report_text(
+                        franchise_names,
+                        find_active_roster_ir_suspended(
+                            rosters_json,
+                            injury_status_by_player_id(injuries_json),
+                            players_map,
+                        ),
+                    )
+                    demote_description = (
+                        f"{as_of_line}\n\n"
+                        + (
+                            demote_report.split("\n\n", 1)[1]
+                            if "\n\n" in demote_report
+                            else demote_report
+                        )
+                    )
+                    if len(demote_description) > 4096:
+                        demote_description = demote_description[:4093] + "..."
+                    demote_key = f"ACTIVE_ROSTER_DEMOTE|{today_et}"
+                    if demote_key not in seen:
                         pending_posts.append(
                             (
-                                report_key,
+                                demote_key,
                                 TradeMessagePayload(
-                                    ROSTER_VIOLATIONS_TITLE,
-                                    violations_description,
-                                    ROSTER_VIOLATIONS_COLOR,
+                                    ACTIVE_ROSTER_CAN_BE_DEMOTED_TITLE,
+                                    demote_description,
+                                    ACTIVE_ROSTER_CAN_BE_DEMOTED_COLOR,
                                 ),
                             )
                         )
-                    reports_state["last_roster_violations_date_et"] = today_et
+                    reports_state["last_active_roster_demote_sunday_date_et"] = today_et
                     _write_reports_state_json(reports_state_path, reports_state)
                     updated_reports_state = True
 

@@ -31,6 +31,9 @@ DEFAULT_IR_ELIGIBLE_STATUSES: frozenset[str] = frozenset(
 ROSTER_VIOLATIONS_TITLE = "Roster Violations"
 ROSTER_VIOLATIONS_COLOR = 15105570  # orange / warning
 
+ACTIVE_ROSTER_CAN_BE_DEMOTED_TITLE = "Active Roster: Can Be Demoted"
+ACTIVE_ROSTER_CAN_BE_DEMOTED_COLOR = 3447003  # blue / informational
+
 _MONEY_RE = re.compile(r"[^0-9.\-]")
 
 
@@ -64,6 +67,15 @@ class StarterRequirementViolation:
     position: str
     have: int
     need: int
+
+
+@dataclass(frozen=True)
+class ActiveIrSuspendedPlayer:
+    franchise_id: str
+    player_id: str
+    player_label: str
+    injury_status: str
+    injury_details: str
 
 
 def ir_eligible_statuses_from_env(
@@ -131,6 +143,15 @@ def _is_ir_roster_status(status: str) -> bool:
 
 def _is_taxi_roster_status(status: str) -> bool:
     return "TAXI" in status.strip().upper()
+
+
+def _is_nfl_ir_or_suspended_status(status: str) -> bool:
+    upper = status.strip().upper()
+    if not upper:
+        return False
+    if upper in {"S", "SUSPENDED"}:
+        return True
+    return upper == "IR" or upper.startswith("IR-") or upper.startswith("IR ")
 
 
 def _player_display_label(player_id: str, players_map: dict[str, str]) -> str:
@@ -406,6 +427,47 @@ def find_ir_eligibility_violations(
     return violations
 
 
+def find_active_roster_ir_suspended(
+    rosters_json: dict[str, Any],
+    injuries_by_player_id: dict[str, dict[str, str]],
+    players_map: dict[str, str],
+) -> list[ActiveIrSuspendedPlayer]:
+    """
+    Active-roster (non-taxi, non-fantasy-IR) players with NFL IR-family or Suspended.
+    """
+    rows: list[ActiveIrSuspendedPlayer] = []
+    for franchise_row in _normalize_franchise_rows(rosters_json):
+        franchise_id = franchise_row.get("id")
+        if franchise_id is None:
+            continue
+        franchise_id_str = str(franchise_id)
+        for player in _normalize_player_rows(franchise_row):
+            roster_status = str(player.get("status") or "")
+            if _is_ir_roster_status(roster_status) or _is_taxi_roster_status(
+                roster_status
+            ):
+                continue
+            player_id_raw = player.get("id")
+            if player_id_raw is None or str(player_id_raw).strip() == "":
+                continue
+            player_id = str(player_id_raw)
+            injury = injuries_by_player_id.get(player_id) or {}
+            injury_status = str(injury.get("status") or "").strip()
+            if not _is_nfl_ir_or_suspended_status(injury_status):
+                continue
+            rows.append(
+                ActiveIrSuspendedPlayer(
+                    franchise_id=franchise_id_str,
+                    player_id=player_id,
+                    player_label=_player_display_label(player_id, players_map),
+                    injury_status=injury_status,
+                    injury_details=str(injury.get("details") or "").strip(),
+                )
+            )
+    rows.sort(key=lambda row: (row.franchise_id, row.player_label.casefold()))
+    return rows
+
+
 def league_slot_limits(league_json: dict[str, Any]) -> dict[str, int | None]:
     """roster / taxi / IR slot caps from TYPE=league (None when unset/unparseable)."""
     league_block = league_json.get("league") or league_json
@@ -483,12 +545,18 @@ def format_roster_violations_report_text(
     """Discord-style description body (title line + blank + bullets by team)."""
     salary_rows = salary_cap_violations or []
     starter_rows = starter_requirement_violations or []
-    if not ir_violations and not slot_violations and not salary_rows and not starter_rows:
+    has_violations = bool(
+        ir_violations or slot_violations or salary_rows or starter_rows
+    )
+    if not has_violations:
         return f"{title}\n\nNo roster violations found."
 
+    lines = [title, ""]
     lines_by_franchise: dict[str, list[str]] = {}
     for violation in ir_violations:
-        detail_part = f" ({violation.injury_details})" if violation.injury_details else ""
+        detail_part = (
+            f" ({violation.injury_details})" if violation.injury_details else ""
+        )
         bullet = (
             f"* IR eligibility: {violation.player_label} — "
             f"{violation.injury_status}{detail_part}"
@@ -527,10 +595,44 @@ def format_roster_violations_report_text(
             franchise_id, f"Franchise {franchise_id}"
         ).casefold(),
     )
-    lines = [title, ""]
     for franchise_id in franchise_ids:
         team_name = franchise_names.get(franchise_id, f"Franchise {franchise_id}")
         lines.append(f"**{team_name}**")
         lines.extend(lines_by_franchise[franchise_id])
+        lines.append("")
+
+    return "\n".join(lines).rstrip()
+
+
+def format_active_roster_can_be_demoted_report_text(
+    franchise_names: dict[str, str],
+    players: list[ActiveIrSuspendedPlayer],
+    *,
+    title: str = ACTIVE_ROSTER_CAN_BE_DEMOTED_TITLE,
+) -> str:
+    """
+    Weekly callout: active-roster players with NFL IR-family / Suspended status.
+
+    These players may be demoted to fantasy IR if the owner chooses.
+    """
+    if not players:
+        return f"{title}\n\nNo active-roster players currently eligible to demote."
+
+    lines = [title, ""]
+    by_franchise: dict[str, list[ActiveIrSuspendedPlayer]] = {}
+    for row in players:
+        by_franchise.setdefault(row.franchise_id, []).append(row)
+    franchise_ids = sorted(
+        by_franchise.keys(),
+        key=lambda franchise_id: franchise_names.get(
+            franchise_id, f"Franchise {franchise_id}"
+        ).casefold(),
+    )
+    for franchise_id in franchise_ids:
+        team_name = franchise_names.get(franchise_id, f"Franchise {franchise_id}")
+        lines.append(f"**{team_name}**")
+        for row in by_franchise[franchise_id]:
+            detail_part = f" ({row.injury_details})" if row.injury_details else ""
+            lines.append(f"* {row.player_label} — {row.injury_status}{detail_part}")
         lines.append("")
     return "\n".join(lines).rstrip()

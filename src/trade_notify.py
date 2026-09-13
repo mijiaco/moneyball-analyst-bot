@@ -38,10 +38,12 @@ from src.mfl_env import (
 from src.roster_violations import (
     _is_ir_roster_status,
     _is_taxi_roster_status,
+    find_active_roster_ir_suspended,
     find_ir_eligibility_violations,
     find_salary_cap_violations,
     find_slot_limit_violations,
     find_starter_requirement_violations,
+    format_active_roster_can_be_demoted_report_text,
     format_roster_violations_report_text,
     franchise_salaries_from_standings,
     franchise_salary_caps_from_league,
@@ -1154,6 +1156,7 @@ async def dry_run(
     cap_space_report_only: bool = False,
     roster_breakdown_report_only: bool = False,
     roster_violations_report_only: bool = False,
+    active_roster_demote_report_only: bool = False,
     traded_2027_picks_report_only: bool = False,
 ) -> int:
     _dotenv_path = Path(__file__).resolve().parent.parent / ".env"
@@ -1215,6 +1218,31 @@ async def dry_run(
             )
             print(
                 "(dry-run: unpaid/traded picks report; balances from TYPE=accounting export)",
+                file=sys.stderr,
+            )
+            return 0
+
+        if active_roster_demote_report_only:
+            league_json = await client.fetch_league()
+            franchise_names = franchise_names_from_league(league_json)
+            await client.sleep_between_exports()
+            rosters_json = await client.fetch_rosters()
+            await client.sleep_between_exports()
+            injuries_json = await client.fetch_injuries()
+            await client.sleep_between_exports()
+            players = await client.get_players_map()
+            print(
+                format_active_roster_can_be_demoted_report_text(
+                    franchise_names,
+                    find_active_roster_ir_suspended(
+                        rosters_json,
+                        injury_status_by_player_id(injuries_json),
+                        players,
+                    ),
+                )
+            )
+            print(
+                "(dry-run: active roster can-be-demoted from rosters + injuries exports)",
                 file=sys.stderr,
             )
             return 0
@@ -1310,12 +1338,13 @@ async def dry_run(
 
     if roster_violations_report_only:
         slot_limits = league_slot_limits(league_json)
+        injuries_by_id = injury_status_by_player_id(injuries_json)
         print(
             format_roster_violations_report_text(
                 franchise_names,
                 find_ir_eligibility_violations(
                     rosters_json,
-                    injury_status_by_player_id(injuries_json),
+                    injuries_by_id,
                     players,
                     eligible_statuses=ir_eligible_statuses_from_env(),
                 ),
@@ -1903,6 +1932,14 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--active-roster-demote-report",
+        action="store_true",
+        help=(
+            "With --dry-run, print active-roster players with NFL IR-family or "
+            "Suspended status (can be demoted to fantasy IR)."
+        ),
+    )
+    parser.add_argument(
         "--traded-2027-picks-report",
         action="store_true",
         help=(
@@ -1953,6 +1990,7 @@ def main() -> None:
         args.cap_space_report,
         args.roster_breakdown_report,
         args.roster_violations_report,
+        args.active_roster_demote_report,
         args.traded_2027_picks_report,
     )
     post_discord_flags = (
@@ -2056,6 +2094,20 @@ def main() -> None:
             parser.error(
                 "--roster-violations-report cannot be used with --traded-2027-picks-report"
             )
+        demote = args.active_roster_demote_report
+        if demote and (
+            args.last_trade
+            or args.with_dedupe
+            or args.top_traders
+            or args.draft_picks_report
+            or args.cap_space_report
+            or args.roster_breakdown_report
+            or args.roster_violations_report
+            or args.traded_2027_picks_report
+        ):
+            parser.error(
+                "--active-roster-demote-report cannot be combined with other report flags"
+            )
         raise SystemExit(
             asyncio.run(
                 dry_run(
@@ -2067,6 +2119,7 @@ def main() -> None:
                     cap_space_report_only=args.cap_space_report,
                     roster_breakdown_report_only=args.roster_breakdown_report,
                     roster_violations_report_only=args.roster_violations_report,
+                    active_roster_demote_report_only=args.active_roster_demote_report,
                     traded_2027_picks_report_only=args.traded_2027_picks_report,
                 )
             )
