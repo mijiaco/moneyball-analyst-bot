@@ -53,6 +53,17 @@ from src.roster_violations import (
     starter_lineup_size,
     starter_position_minimums,
 )
+from src.top_scorers_report import (
+    SLATE_PROCESS_ORDER,
+    format_top_scorers_report_text,
+    nfl_week_from_schedule,
+    parse_nfl_schedule_games,
+    parse_player_week_scores,
+    scores_for_slate,
+    should_build_slate_report,
+    top_scorers_by_position,
+    top_scorers_title,
+)
 from src.rfa_state import parse_free_agent_moves
 from src.taxi_cut_report import (
     TAXI_CUT_WEEKLY_COLOR,
@@ -1157,6 +1168,7 @@ async def dry_run(
     roster_breakdown_report_only: bool = False,
     roster_violations_report_only: bool = False,
     active_roster_demote_report_only: bool = False,
+    top_scorers_report_only: bool = False,
     traded_2027_picks_report_only: bool = False,
 ) -> int:
     _dotenv_path = Path(__file__).resolve().parent.parent / ".env"
@@ -1243,6 +1255,41 @@ async def dry_run(
             )
             print(
                 "(dry-run: active roster can-be-demoted from rosters + injuries exports)",
+                file=sys.stderr,
+            )
+            return 0
+
+        if top_scorers_report_only:
+            schedule_json = await client.fetch_nfl_schedule()
+            week = nfl_week_from_schedule(schedule_json)
+            await client.sleep_between_exports()
+            scores_json = await client.fetch_player_scores_week(week=week or None)
+            await client.sleep_between_exports()
+            players = await client.get_players_map()
+            games = parse_nfl_schedule_games(schedule_json)
+            scores = parse_player_week_scores(scores_json, players)
+            printed = False
+            for slate_id in SLATE_PROCESS_ORDER:
+                if not should_build_slate_report(slate_id, games):
+                    continue
+                ranked = top_scorers_by_position(
+                    scores_for_slate(scores, games, slate_id)
+                )
+                if not ranked:
+                    continue
+                if printed:
+                    print()
+                print(
+                    format_top_scorers_report_text(
+                        ranked,
+                        title=top_scorers_title(slate_id, week=week),
+                    )
+                )
+                printed = True
+            if not printed:
+                print("Top Scorers\n\nNo finished slates with scorers yet.")
+            print(
+                "(dry-run: top scorers from nflSchedule + playerScores)",
                 file=sys.stderr,
             )
             return 0
@@ -1940,6 +1987,14 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--top-scorers-report",
+        action="store_true",
+        help=(
+            "With --dry-run, print top-5 scorers by position for finished NFL slates "
+            "plus the week-to-date cumulative list."
+        ),
+    )
+    parser.add_argument(
         "--traded-2027-picks-report",
         action="store_true",
         help=(
@@ -1991,6 +2046,7 @@ def main() -> None:
         args.roster_breakdown_report,
         args.roster_violations_report,
         args.active_roster_demote_report,
+        args.top_scorers_report,
         args.traded_2027_picks_report,
     )
     post_discord_flags = (
@@ -2103,10 +2159,24 @@ def main() -> None:
             or args.cap_space_report
             or args.roster_breakdown_report
             or args.roster_violations_report
+            or args.top_scorers_report
             or args.traded_2027_picks_report
         ):
             parser.error(
                 "--active-roster-demote-report cannot be combined with other report flags"
+            )
+        if args.top_scorers_report and (
+            args.last_trade
+            or args.with_dedupe
+            or args.top_traders
+            or args.draft_picks_report
+            or args.cap_space_report
+            or args.roster_breakdown_report
+            or args.roster_violations_report
+            or args.traded_2027_picks_report
+        ):
+            parser.error(
+                "--top-scorers-report cannot be combined with other report flags"
             )
         raise SystemExit(
             asyncio.run(
@@ -2120,6 +2190,7 @@ def main() -> None:
                     roster_breakdown_report_only=args.roster_breakdown_report,
                     roster_violations_report_only=args.roster_violations_report,
                     active_roster_demote_report_only=args.active_roster_demote_report,
+                    top_scorers_report_only=args.top_scorers_report,
                     traded_2027_picks_report_only=args.traded_2027_picks_report,
                 )
             )

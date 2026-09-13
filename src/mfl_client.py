@@ -169,6 +169,37 @@ class MflClient:
         assert last_err is not None
         raise last_err
 
+    async def fetch_nfl_schedule(self, *, week: str | None = None) -> dict[str, Any]:
+        """
+        NFL weekly schedule (kickoff, teams, gameSecondsRemaining).
+
+        MFL requires this export on api.myfantasyleague.com (league hosts reject it).
+        """
+        params: dict[str, str] = {"TYPE": "nflSchedule", "JSON": "1"}
+        if week is not None and str(week).strip():
+            params["W"] = str(week).strip()
+        url = f"https://api.myfantasyleague.com/{self._year}/export"
+        last_err: BaseException | None = None
+        for attempt in range(3):
+            try:
+                response = await self._client.get(url, params=params)
+                response.raise_for_status()
+                data = response.json()
+                return data if isinstance(data, dict) else {}
+            except (httpx.HTTPError, OSError, ValueError) as exc:
+                last_err = exc
+                await asyncio.sleep(1.0 * (attempt + 1))
+        assert last_err is not None
+        raise last_err
+
+    async def fetch_player_scores_week(self, *, week: str | None = None) -> dict[str, Any]:
+        """Weekly playerScores using this league's scoring (W omitted = current week)."""
+        params: dict[str, str] = {"TYPE": "playerScores"}
+        if week is not None and str(week).strip():
+            params["W"] = str(week).strip()
+        data = await self._get_json(params)
+        return data if isinstance(data, dict) else {}
+
     async def fetch_player_scores_current_year(self) -> dict[str, Any]:
         """
         Fetch player scores using MFL's default current-year export endpoint.

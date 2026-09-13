@@ -64,6 +64,19 @@ from src.roster_violations import (
     starter_lineup_size,
     starter_position_minimums,
 )
+from src.top_scorers_report import (
+    TOP_SCORERS_COLOR,
+    due_top_scorer_slate_ids,
+    format_top_scorers_report_text,
+    nfl_week_from_schedule,
+    parse_nfl_schedule_games,
+    parse_player_week_scores,
+    scores_for_slate,
+    scoring_week_key,
+    should_build_slate_report,
+    top_scorers_by_position,
+    top_scorers_title,
+)
 from src.taxi_cut_report import (
     TAXI_CUT_ALERT_COLOR,
     TAXI_CUT_ALERT_TITLE,
@@ -309,6 +322,7 @@ async def _async_main() -> int:
     sunday_active_roster_demote_report_enabled = env_bool(
         "MFL_SUNDAY_ACTIVE_ROSTER_DEMOTE_REPORT_ENABLED", False
     )
+    top_scorers_report_enabled = env_bool("MFL_TOP_SCORERS_REPORT_ENABLED", True)
     rfa_report_enabled = env_bool("MFL_RFA_REPORT_ENABLED", True)
     rfa_invalid_claim_alerts_enabled = env_bool(
         "MFL_RFA_INVALID_CLAIM_ALERTS_ENABLED", True
@@ -519,9 +533,10 @@ async def _async_main() -> int:
                             else violations_report
                         )
                     )
+                    has_violations = "No roster violations found." not in violations_report
                     for slot_key in due_slots:
                         report_key = f"ROSTER_VIOLATIONS|{slot_key}"
-                        if report_key not in seen:
+                        if has_violations and report_key not in seen:
                             pending_posts.append(
                                 (
                                     report_key,
@@ -628,21 +643,21 @@ async def _async_main() -> int:
                         accounting_balance_under=unpaid_threshold,
                     )
                     as_of_line = f"As of {_as_of_label_et(now_sun)}"
-                    disclaimer = (
-                        "These teams owe the balance for 2027 for trading away 1 or more of "
-                        "their 2027 picks. Note: this list could be outdated if MFL accounting "
-                        "balance hasn't been updated."
-                    )
                     body = (
                         report_text.split("\n\n", 1)[1]
                         if "\n\n" in report_text
                         else report_text
                     )
-                    description = f"{as_of_line}\n\n{disclaimer}\n\n{body}"
-                    if len(description) > 4096:
-                        description = description[:4093] + "..."
                     sunday_key = f"SUNDAY_UNPAID|{today_et}"
-                    if sunday_key not in seen:
+                    if not body.startswith("No teams") and sunday_key not in seen:
+                        disclaimer = (
+                            "These teams owe the balance for 2027 for trading away 1 or more of "
+                            "their 2027 picks. Note: this list could be outdated if MFL accounting "
+                            "balance hasn't been updated."
+                        )
+                        description = f"{as_of_line}\n\n{disclaimer}\n\n{body}"
+                        if len(description) > 4096:
+                            description = description[:4093] + "..."
                         pending_posts.append(
                             (
                                 sunday_key,
@@ -656,6 +671,84 @@ async def _async_main() -> int:
                     reports_state["last_unpaid_owners_sunday_date_et"] = today_et
                     _write_reports_state_json(reports_state_path, reports_state)
                     updated_reports_state = True
+
+        if top_scorers_report_enabled:
+            now_scorers = schedule_now_et
+            due_slates = due_top_scorer_slate_ids(now_scorers)
+            if due_slates:
+                reports_state = _read_reports_state_json(reports_state_path)
+                posted_scorers = {
+                    str(item)
+                    for item in (reports_state.get("last_top_scorers_slots") or [])
+                    if str(item).strip()
+                }
+                maybe_unposted = [
+                    slate_id
+                    for slate_id in due_slates
+                    if not any(
+                        item.endswith(f"|{slate_id}") for item in posted_scorers
+                    )
+                ]
+                if maybe_unposted:
+                    await mfl.sleep_between_exports()
+                    schedule_json = await mfl.fetch_nfl_schedule()
+                    week = nfl_week_from_schedule(schedule_json)
+                    await mfl.sleep_between_exports()
+                    scores_json = await mfl.fetch_player_scores_week(
+                        week=week or None
+                    )
+                    await mfl.sleep_between_exports()
+                    players_map = await mfl.get_players_map()
+                    games = parse_nfl_schedule_games(schedule_json)
+                    week_key = scoring_week_key(year, week, games)
+                    scores = parse_player_week_scores(scores_json, players_map)
+                    as_of_line = f"As of {_as_of_label_et(now_scorers)}"
+                    changed = False
+                    for slate_id in due_slates:
+                        slot_key = f"{week_key}|{slate_id}"
+                        if slot_key in posted_scorers:
+                            continue
+                        if not should_build_slate_report(slate_id, games):
+                            continue
+                        ranked = top_scorers_by_position(
+                            scores_for_slate(scores, games, slate_id)
+                        )
+                        posted_scorers.add(slot_key)
+                        changed = True
+                        if not ranked:
+                            continue
+                        title = top_scorers_title(slate_id, week=week)
+                        report_text = format_top_scorers_report_text(
+                            ranked, title=title
+                        )
+                        body = (
+                            report_text.split("\n\n", 1)[1]
+                            if "\n\n" in report_text
+                            else report_text
+                        )
+                        description = f"{as_of_line}\n\n{body}"
+                        if len(description) > 4096:
+                            description = description[:4093] + "..."
+                        report_key = f"TOP_SCORERS|{slot_key}"
+                        if report_key not in seen:
+                            pending_posts.append(
+                                (
+                                    report_key,
+                                    TradeMessagePayload(
+                                        title,
+                                        description,
+                                        TOP_SCORERS_COLOR,
+                                    ),
+                                )
+                            )
+                    if changed:
+                        reports_state["last_top_scorers_slots"] = sorted(
+                            posted_scorers
+                        )
+                        _write_reports_state_json(
+                            reports_state_path, reports_state
+                        )
+                        updated_reports_state = True
 
         if rfa_report_enabled:
             now_rfa = schedule_now_et
@@ -828,30 +921,31 @@ async def _async_main() -> int:
                 week_key = _current_week_key_et(now_taxi)
                 if week_key != str(updated_taxi_state.get("last_weekly_week_key") or ""):
                     pending_rows = unreimbursed_taxi_cuts(updated_taxi_state)
-                    report_text = format_taxi_cut_weekly_report_text(
-                        pending_rows,
-                        franchise_names,
-                    )
-                    body = (
-                        report_text.split("\n\n", 1)[1]
-                        if "\n\n" in report_text
-                        else report_text
-                    )
-                    description = f"{as_of_taxi}\n\n{body}"
-                    if len(description) > 4096:
-                        description = description[:4093] + "..."
-                    report_key = f"WEEKLY_REPORT|{week_key}|{TAXI_CUT_WEEKLY_TITLE}"
-                    if report_key not in seen:
-                        pending_posts.append(
-                            (
-                                report_key,
-                                TradeMessagePayload(
-                                    TAXI_CUT_WEEKLY_TITLE,
-                                    description,
-                                    TAXI_CUT_WEEKLY_COLOR,
-                                ),
-                            )
+                    if pending_rows:
+                        report_text = format_taxi_cut_weekly_report_text(
+                            pending_rows,
+                            franchise_names,
                         )
+                        body = (
+                            report_text.split("\n\n", 1)[1]
+                            if "\n\n" in report_text
+                            else report_text
+                        )
+                        description = f"{as_of_taxi}\n\n{body}"
+                        if len(description) > 4096:
+                            description = description[:4093] + "..."
+                        report_key = f"WEEKLY_REPORT|{week_key}|{TAXI_CUT_WEEKLY_TITLE}"
+                        if report_key not in seen:
+                            pending_posts.append(
+                                (
+                                    report_key,
+                                    TradeMessagePayload(
+                                        TAXI_CUT_WEEKLY_TITLE,
+                                        description,
+                                        TAXI_CUT_WEEKLY_COLOR,
+                                    ),
+                                )
+                            )
                     updated_taxi_state["last_weekly_week_key"] = week_key
 
             save_taxi_cut_state(taxi_cut_state_path, updated_taxi_state)
