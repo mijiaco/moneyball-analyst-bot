@@ -237,6 +237,83 @@ def parse_player_week_scores(
     return out
 
 
+def parse_live_scoring_points(live_json: dict[str, Any]) -> dict[str, float]:
+    """player_id -> actual week points from TYPE=liveScoring (DETAILS=1)."""
+    block = live_json.get("liveScoring") or live_json
+    points: dict[str, float] = {}
+
+    def _absorb(player_rows: list[dict[str, Any]]) -> None:
+        for row in player_rows:
+            player_id = str(row.get("id") or "").strip()
+            value = _as_float(row.get("score") or row.get("points"))
+            if not player_id or value is None:
+                continue
+            prior = points.get(player_id)
+            if prior is None or value > prior:
+                points[player_id] = value
+
+    matchups = _as_rows(block.get("matchup"))
+    if matchups:
+        for matchup in matchups:
+            for franchise in _as_rows(matchup.get("franchise")):
+                players_block = franchise.get("players") or {}
+                _absorb(
+                    _as_rows(
+                        players_block.get("player")
+                        if isinstance(players_block, dict)
+                        else players_block
+                    )
+                )
+    else:
+        for franchise in _as_rows(block.get("franchise")):
+            players_block = franchise.get("players") or {}
+            _absorb(
+                _as_rows(
+                    players_block.get("player")
+                    if isinstance(players_block, dict)
+                    else players_block
+                )
+            )
+    return points
+
+
+def week_scores_from_exports(
+    scores_json: dict[str, Any],
+    live_json: dict[str, Any],
+    players_map: dict[str, str],
+) -> list[PlayerWeekScore]:
+    """
+    Combine playerScores with liveScoring.
+
+    MFL playerScores often omits Sunday players for hours after games are final;
+    liveScoring already has those rostered-player totals.
+    """
+    merged: dict[str, PlayerWeekScore] = {
+        row.player_id: row
+        for row in parse_player_week_scores(scores_json, players_map)
+    }
+    for player_id, points in parse_live_scoring_points(live_json).items():
+        if points <= 0:
+            continue
+        existing = merged.get(player_id)
+        if existing is not None and existing.points >= points:
+            continue
+        label = players_map.get(player_id) or (
+            existing.label if existing is not None else f"Player {player_id}"
+        )
+        position = player_position_from_label(label)
+        if not position:
+            continue
+        merged[player_id] = PlayerWeekScore(
+            player_id=player_id,
+            position=position,
+            label=label,
+            points=points,
+            nfl_team=player_team_from_label(label),
+        )
+    return list(merged.values())
+
+
 def games_for_slate(games: list[NflGame], slate_id: str) -> list[NflGame]:
     return [game for game in games if game.slate_id == slate_id]
 

@@ -200,6 +200,21 @@ class MflClient:
         data = await self._get_json(params)
         return data if isinstance(data, dict) else {}
 
+    async def fetch_live_scoring(
+        self,
+        *,
+        week: str | None = None,
+        details: bool = True,
+    ) -> dict[str, Any]:
+        """Live/actual roster scores for the week (DETAILS=1 includes non-starters)."""
+        params: dict[str, str] = {"TYPE": "liveScoring"}
+        if week is not None and str(week).strip():
+            params["W"] = str(week).strip()
+        if details:
+            params["DETAILS"] = "1"
+        data = await self._get_json(params)
+        return data if isinstance(data, dict) else {}
+
     async def fetch_player_scores_current_year(self) -> dict[str, Any]:
         """
         Fetch player scores using MFL's default current-year export endpoint.

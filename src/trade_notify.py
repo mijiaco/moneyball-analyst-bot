@@ -58,7 +58,7 @@ from src.top_scorers_report import (
     format_top_scorers_report_text,
     nfl_week_from_schedule,
     parse_nfl_schedule_games,
-    parse_player_week_scores,
+    week_scores_from_exports,
     scores_for_slate,
     should_build_slate_report,
     top_scorers_by_position,
@@ -1265,9 +1265,11 @@ async def dry_run(
             await client.sleep_between_exports()
             scores_json = await client.fetch_player_scores_week(week=week or None)
             await client.sleep_between_exports()
+            live_json = await client.fetch_live_scoring(week=week or None)
+            await client.sleep_between_exports()
             players = await client.get_players_map()
             games = parse_nfl_schedule_games(schedule_json)
-            scores = parse_player_week_scores(scores_json, players)
+            scores = week_scores_from_exports(scores_json, live_json, players)
             printed = False
             for slate_id in SLATE_PROCESS_ORDER:
                 if not should_build_slate_report(slate_id, games):

@@ -71,7 +71,7 @@ from src.top_scorers_report import (
     format_top_scorers_report_text,
     nfl_week_from_schedule,
     parse_nfl_schedule_games,
-    parse_player_week_scores,
+    week_scores_from_exports,
     scores_for_slate,
     scoring_week_key,
     should_build_slate_report,
@@ -699,10 +699,14 @@ async def _async_main() -> int:
                         week=week or None
                     )
                     await mfl.sleep_between_exports()
+                    live_json = await mfl.fetch_live_scoring(week=week or None)
+                    await mfl.sleep_between_exports()
                     players_map = await mfl.get_players_map()
                     games = parse_nfl_schedule_games(schedule_json)
                     week_key = scoring_week_key(year, week, games)
-                    scores = parse_player_week_scores(scores_json, players_map)
+                    scores = week_scores_from_exports(
+                        scores_json, live_json, players_map
+                    )
                     as_of_line = f"As of {_as_of_label_et(now_scorers)}"
                     changed = False
                     for slate_id in due_slates:

@@ -14,6 +14,7 @@ from src.top_scorers_report import (
     format_top_scorers_report_text,
     nfl_week_from_schedule,
     parse_nfl_schedule_games,
+    parse_live_scoring_points,
     parse_player_week_scores,
     player_team_from_label,
     scores_for_slate,
@@ -24,6 +25,7 @@ from src.top_scorers_report import (
     top_scorers_by_position,
     top_scorers_dedupe_key,
     top_scorers_title,
+    week_scores_from_exports,
 )
 
 ET = ZoneInfo("America/New_York")
@@ -195,3 +197,46 @@ def test_announced_top_scorer_slate_ids_ignores_cursor_only_slots() -> None:
     assert top_scorers_dedupe_key("2026-W01", "early_sun") == (
         "TOP_SCORERS|2026-W01|early_sun"
     )
+
+
+def test_week_scores_from_exports_fills_sunday_from_live_scoring() -> None:
+    games = [
+        NflGame(
+            slate_id="early_sun",
+            kickoff=datetime(2026, 9, 13, 13, 0, tzinfo=ET),
+            is_final=True,
+            team_ids=("BAL", "IND"),
+        )
+    ]
+    player_scores = {
+        "playerScores": {
+            "playerScore": [{"id": "1", "score": "22.7"}]
+        }
+    }
+    live = {
+        "liveScoring": {
+            "matchup": [
+                {
+                    "franchise": [
+                        {
+                            "players": {
+                                "player": [
+                                    {"id": "1", "score": "22.7", "status": "starter"},
+                                    {"id": "9", "score": "27.4", "status": "starter"},
+                                ]
+                            }
+                        }
+                    ]
+                }
+            ]
+        }
+    }
+    players = {
+        "1": "Samuel, Deebo SFO WR",
+        "9": "Jackson, Lamar BAL QB",
+    }
+    assert parse_live_scoring_points(live)["9"] == 27.4
+    merged = week_scores_from_exports(player_scores, live, players)
+    early = scores_for_slate(merged, games, "early_sun")
+    assert [row.player_id for row in early] == ["9"]
+    assert early[0].points == 27.4
