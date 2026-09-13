@@ -137,6 +137,23 @@ def scoring_week_key(year: str, week: str, games: list[NflGame]) -> str:
     return f"{year}-unknown"
 
 
+def top_scorers_dedupe_key(week_key: str, slate_id: str) -> str:
+    return f"TOP_SCORERS|{week_key}|{slate_id}"
+
+
+def announced_top_scorer_slate_ids(seen: set[str]) -> set[str]:
+    """Slate ids that already have a Discord announcement key in seen."""
+    announced: set[str] = set()
+    for key in seen:
+        text = str(key)
+        if not text.startswith("TOP_SCORERS|"):
+            continue
+        slate_id = text.rsplit("|", 1)[-1]
+        if slate_id:
+            announced.add(slate_id)
+    return announced
+
+
 def top_scorers_title(slate_id: str, *, week: str = "") -> str:
     slate_label = SLATE_TITLES.get(slate_id, slate_id)
     if week:

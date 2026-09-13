@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 from src.top_scorers_report import (
     NflGame,
     PlayerWeekScore,
+    announced_top_scorer_slate_ids,
     due_top_scorer_slate_ids,
     format_top_scorers_report_text,
     nfl_week_from_schedule,
@@ -21,6 +22,7 @@ from src.top_scorers_report import (
     slate_id_for_kickoff,
     slate_is_final,
     top_scorers_by_position,
+    top_scorers_dedupe_key,
     top_scorers_title,
 )
 
@@ -180,3 +182,16 @@ def test_top_scorers_sorts_and_limits() -> None:
     ]
     ranked = top_scorers_by_position(rows)
     assert [row.player_id for row in ranked["RB"]] == ["2", "3", "1", "4", "5"]
+
+
+def test_announced_top_scorer_slate_ids_ignores_cursor_only_slots() -> None:
+    seen = {
+        "TOP_SCORERS|2026-W01|wed",
+        "TOP_SCORERS|2026-W01|tnf",
+        "ROSTER_VIOLATIONS|2026-09-13|15:30",
+    }
+    assert announced_top_scorer_slate_ids(seen) == {"wed", "tnf"}
+    assert "early_sun" not in announced_top_scorer_slate_ids(seen)
+    assert top_scorers_dedupe_key("2026-W01", "early_sun") == (
+        "TOP_SCORERS|2026-W01|early_sun"
+    )

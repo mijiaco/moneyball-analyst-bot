@@ -66,6 +66,7 @@ from src.roster_violations import (
 )
 from src.top_scorers_report import (
     TOP_SCORERS_COLOR,
+    announced_top_scorer_slate_ids,
     due_top_scorer_slate_ids,
     format_top_scorers_report_text,
     nfl_week_from_schedule,
@@ -75,6 +76,7 @@ from src.top_scorers_report import (
     scoring_week_key,
     should_build_slate_report,
     top_scorers_by_position,
+    top_scorers_dedupe_key,
     top_scorers_title,
 )
 from src.taxi_cut_report import (
@@ -682,12 +684,11 @@ async def _async_main() -> int:
                     for item in (reports_state.get("last_top_scorers_slots") or [])
                     if str(item).strip()
                 }
+                announced_slates = announced_top_scorer_slate_ids(seen)
                 maybe_unposted = [
                     slate_id
                     for slate_id in due_slates
-                    if not any(
-                        item.endswith(f"|{slate_id}") for item in posted_scorers
-                    )
+                    if slate_id not in announced_slates
                 ]
                 if maybe_unposted:
                     await mfl.sleep_between_exports()
@@ -706,16 +707,21 @@ async def _async_main() -> int:
                     changed = False
                     for slate_id in due_slates:
                         slot_key = f"{week_key}|{slate_id}"
-                        if slot_key in posted_scorers:
+                        report_key = top_scorers_dedupe_key(week_key, slate_id)
+                        if report_key in seen:
+                            posted_scorers.add(slot_key)
+                            changed = True
                             continue
                         if not should_build_slate_report(slate_id, games):
                             continue
                         ranked = top_scorers_by_position(
                             scores_for_slate(scores, games, slate_id)
                         )
-                        posted_scorers.add(slot_key)
-                        changed = True
                         if not ranked:
+                            # MFL playerScores often lags gameSecondsRemaining=0.
+                            if slot_key in posted_scorers:
+                                posted_scorers.discard(slot_key)
+                                changed = True
                             continue
                         title = top_scorers_title(slate_id, week=week)
                         report_text = format_top_scorers_report_text(
@@ -729,18 +735,18 @@ async def _async_main() -> int:
                         description = f"{as_of_line}\n\n{body}"
                         if len(description) > 4096:
                             description = description[:4093] + "..."
-                        report_key = f"TOP_SCORERS|{slot_key}"
-                        if report_key not in seen:
-                            pending_posts.append(
-                                (
-                                    report_key,
-                                    TradeMessagePayload(
-                                        title,
-                                        description,
-                                        TOP_SCORERS_COLOR,
-                                    ),
-                                )
+                        pending_posts.append(
+                            (
+                                report_key,
+                                TradeMessagePayload(
+                                    title,
+                                    description,
+                                    TOP_SCORERS_COLOR,
+                                ),
                             )
+                        )
+                        posted_scorers.add(slot_key)
+                        changed = True
                     if changed:
                         reports_state["last_top_scorers_slots"] = sorted(
                             posted_scorers
