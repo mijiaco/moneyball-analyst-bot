@@ -197,7 +197,11 @@ def _is_weekly_reports_due(now_et: datetime) -> bool:
 # weekday(): Mon=0 ... Sun=6
 _ROSTER_VIOLATIONS_SLOTS_BY_WEEKDAY: dict[int, tuple[tuple[int, int], ...]] = {
     0: ((19, 30),),  # Monday 7:30 PM ET
+    1: ((15, 0),),  # Tuesday 3:00 PM ET
+    2: ((15, 0),),  # Wednesday 3:00 PM ET
     3: ((19, 30),),  # Thursday 7:30 PM ET
+    4: ((15, 0),),  # Friday 3:00 PM ET
+    5: ((15, 0),),  # Saturday 3:00 PM ET
     6: ((12, 15), (15, 30), (19, 30)),  # Sunday 12:15 / 3:30 / 7:30 PM ET
 }
 
