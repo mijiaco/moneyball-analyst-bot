@@ -53,6 +53,10 @@ from src.roster_violations import (
     starter_lineup_size,
     starter_position_minimums,
 )
+from src.trade_roster_check import (
+    append_trade_roster_warning,
+    post_trade_roster_warning_text,
+)
 from src.top_scorers_report import (
     SLATE_PROCESS_ORDER,
     format_top_scorers_report_text,
@@ -663,6 +667,53 @@ def format_trade_text(
                     f"Invalid trade. {tname} hasn't paid for 2027 picks yet."
                 )
     return "\n\n".join(out_parts)
+
+
+_TRADE_DESCRIPTION_LIMIT = 4096
+
+
+def format_trade_text_with_roster_warning(
+    tx: dict[str, Any],
+    franchise_names: dict[str, str],
+    players: dict[str, str],
+    season_year: int,
+    salaries_by_franchise: dict[str, dict[str, str]] | None,
+    points_by_player_id: dict[str, float] | None,
+    contract_years_by_franchise: dict[str, dict[str, str]] | None,
+    *,
+    accounting_balance_by_franchise: dict[str, float] | None,
+    unpaid_accounting_threshold: float,
+    league_json: dict[str, Any],
+    rosters_json: dict[str, Any],
+    injuries_by_id: dict[str, dict[str, str]],
+    salary_totals: dict[str, float],
+    now_unix: float,
+) -> str:
+    body = format_trade_text(
+        tx,
+        franchise_names,
+        players,
+        season_year,
+        salaries_by_franchise,
+        points_by_player_id,
+        contract_years_by_franchise,
+        accounting_balance_by_franchise=accounting_balance_by_franchise,
+        unpaid_accounting_threshold=unpaid_accounting_threshold,
+    )
+    warning = post_trade_roster_warning_text(
+        tx,
+        franchise_names=franchise_names,
+        players_map=players,
+        rosters_json=rosters_json,
+        league_json=league_json,
+        injuries_by_id=injuries_by_id,
+        salary_by_franchise=salary_totals,
+        player_salaries=salaries_by_franchise or {},
+        now_unix=now_unix,
+    )
+    return append_trade_roster_warning(
+        body, warning, limit=_TRADE_DESCRIPTION_LIMIT
+    )
 
 
 def format_trade_bait_text(
@@ -1309,7 +1360,13 @@ async def dry_run(
         rosters_json = await client.fetch_rosters()
         injuries_json: dict[str, Any] = {}
         standings_json: dict[str, Any] = {}
-        if roster_violations_report_only:
+        fetch_injury_standings = roster_violations_report_only or last_trade_only or (
+            not top_traders_only
+            and not draft_picks_report_only
+            and not cap_space_report_only
+            and not roster_breakdown_report_only
+        )
+        if fetch_injury_standings:
             await client.sleep_between_exports()
             injuries_json = await client.fetch_injuries()
             await client.sleep_between_exports()
@@ -1327,6 +1384,8 @@ async def dry_run(
     salaries = player_salaries_by_franchise(rosters_json)
     contract_years = player_contract_years_by_franchise(rosters_json)
     points_by_player_id = player_points_by_id(scores_json)
+    injuries_by_id = injury_status_by_player_id(injuries_json)
+    salary_totals = franchise_salaries_from_standings(standings_json)
     now = time.time()
 
     if top_traders_only:
@@ -1429,7 +1488,7 @@ async def dry_run(
         trades_only.sort(key=lambda t: trade_submitted_unix(t) or 0.0)
         tx = trades_only[-1]
         print(
-            format_trade_text(
+            format_trade_text_with_roster_warning(
                 tx,
                 franchise_names,
                 players,
@@ -1439,6 +1498,11 @@ async def dry_run(
                 contract_years,
                 accounting_balance_by_franchise=accounting_totals,
                 unpaid_accounting_threshold=unpaid_threshold,
+                league_json=league_json,
+                rosters_json=rosters_json,
+                injuries_by_id=injuries_by_id,
+                salary_totals=salary_totals,
+                now_unix=now,
             )
         )
         pending = not is_processed_trade(tx, now)
@@ -1474,7 +1538,7 @@ async def dry_run(
                 seeded += 1
             continue
         print(
-            format_trade_text(
+            format_trade_text_with_roster_warning(
                 tx,
                 franchise_names,
                 players,
@@ -1484,6 +1548,11 @@ async def dry_run(
                 contract_years,
                 accounting_balance_by_franchise=accounting_totals,
                 unpaid_accounting_threshold=unpaid_threshold,
+                league_json=league_json,
+                rosters_json=rosters_json,
+                injuries_by_id=injuries_by_id,
+                salary_totals=salary_totals,
+                now_unix=now,
             )
         )
         print("---")

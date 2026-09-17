@@ -533,25 +533,12 @@ def find_slot_limit_violations(
     return violations
 
 
-def format_roster_violations_report_text(
-    franchise_names: dict[str, str],
+def _violation_lines_by_franchise(
     ir_violations: list[IrEligibilityViolation],
     slot_violations: list[SlotLimitViolation],
-    *,
-    salary_cap_violations: list[SalaryCapViolation] | None = None,
-    starter_requirement_violations: list[StarterRequirementViolation] | None = None,
-    title: str = ROSTER_VIOLATIONS_TITLE,
-) -> str:
-    """Discord-style description body (title line + blank + bullets by team)."""
-    salary_rows = salary_cap_violations or []
-    starter_rows = starter_requirement_violations or []
-    has_violations = bool(
-        ir_violations or slot_violations or salary_rows or starter_rows
-    )
-    if not has_violations:
-        return f"{title}\n\nNo roster violations found."
-
-    lines = [title, ""]
+    salary_rows: list[SalaryCapViolation],
+    starter_rows: list[StarterRequirementViolation],
+) -> dict[str, list[str]]:
     lines_by_franchise: dict[str, list[str]] = {}
     for violation in ir_violations:
         detail_part = (
@@ -588,7 +575,28 @@ def format_roster_violations_report_text(
                 f"{violation.have}/{violation.need}"
             )
         lines_by_franchise.setdefault(violation.franchise_id, []).append(bullet)
+    return lines_by_franchise
 
+
+def format_roster_violations_report_text(
+    franchise_names: dict[str, str],
+    ir_violations: list[IrEligibilityViolation],
+    slot_violations: list[SlotLimitViolation],
+    *,
+    salary_cap_violations: list[SalaryCapViolation] | None = None,
+    starter_requirement_violations: list[StarterRequirementViolation] | None = None,
+    title: str = ROSTER_VIOLATIONS_TITLE,
+) -> str:
+    """Discord-style description body (title line + blank + bullets by team)."""
+    salary_rows = salary_cap_violations or []
+    starter_rows = starter_requirement_violations or []
+    lines_by_franchise = _violation_lines_by_franchise(
+        ir_violations, slot_violations, salary_rows, starter_rows
+    )
+    if not lines_by_franchise:
+        return f"{title}\n\nNo roster violations found."
+
+    lines = [title, ""]
     franchise_ids = sorted(
         lines_by_franchise.keys(),
         key=lambda franchise_id: franchise_names.get(
@@ -601,6 +609,46 @@ def format_roster_violations_report_text(
         lines.extend(lines_by_franchise[franchise_id])
         lines.append("")
 
+    return "\n".join(lines).rstrip()
+
+
+def format_trade_parties_roster_violations_text(
+    franchise_ids: set[str],
+    franchise_names: dict[str, str],
+    ir_violations: list[IrEligibilityViolation],
+    slot_violations: list[SlotLimitViolation],
+    *,
+    salary_cap_violations: list[SalaryCapViolation] | None = None,
+    starter_requirement_violations: list[StarterRequirementViolation] | None = None,
+) -> str:
+    """Section for trade embeds; empty string when neither team is in violation."""
+    wanted = {str(fid).strip() for fid in franchise_ids if str(fid).strip()}
+    if not wanted:
+        return ""
+    lines_by_franchise = _violation_lines_by_franchise(
+        [row for row in ir_violations if row.franchise_id in wanted],
+        [row for row in slot_violations if row.franchise_id in wanted],
+        [row for row in (salary_cap_violations or []) if row.franchise_id in wanted],
+        [
+            row
+            for row in (starter_requirement_violations or [])
+            if row.franchise_id in wanted
+        ],
+    )
+    if not lines_by_franchise:
+        return ""
+    lines = ["**Invalid roster after this trade**", ""]
+    ordered_ids = sorted(
+        lines_by_franchise.keys(),
+        key=lambda franchise_id: franchise_names.get(
+            franchise_id, f"Franchise {franchise_id}"
+        ).casefold(),
+    )
+    for franchise_id in ordered_ids:
+        team_name = franchise_names.get(franchise_id, f"Franchise {franchise_id}")
+        lines.append(f"**{team_name}**")
+        lines.extend(lines_by_franchise[franchise_id])
+        lines.append("")
     return "\n".join(lines).rstrip()
 
 

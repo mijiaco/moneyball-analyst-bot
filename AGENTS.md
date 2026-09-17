@@ -26,6 +26,7 @@ Do **not** commit secrets, `.env`, or API keys. Never overwrite `.env` without e
 |------|------|
 | `src/run_once.py` | Single-shot poll + Discord REST posts + save dedupe; Actions entrypoint. |
 | `src/trade_poll_core.py` | Shared fetch + build payloads for trades and trade bait. |
+| `src/trade_roster_check.py` | Post-trade roster simulation + invalid-roster section for trade embeds. |
 | `src/trade_notify.py` | Fingerprints, formatting, dry-run CLI (`python -m src.trade_notify`). |
 | `src/mfl_client.py` | Async HTTP client for `…/export` endpoints; players cache; **`INCLUDE_DRAFT_PICKS`** on trade bait fetch so `willGiveUp` includes `DP_` / `FP_` tokens. |
 | `src/mfl_env.py` | Requires `MFL_HOST`, `MFL_YEAR`, `MFL_LEAGUE_ID` from env (no baked-in league defaults). |
@@ -214,7 +215,7 @@ python3 -m src.bot                   # optional; needs env
 7. **Taxi-cut refund still listed after commish cleared cap** — refund matching accepts a franchise **−$amount** adjustment equal to dead money, **or** removal of the originating `Dropped …` salary adjustment. Deleting the charge (with no negative line) should clear `pending_cuts` on the next poll.
 7. **Roster violations / injuries** — `TYPE=injuries` must use **`api.myfantasyleague.com`** (league host returns an error). Roster Violations posts on Thu/Sun/Mon ET slots (Thu/Mon 7:30 PM; Sun 12:15 / 3:30 / 7:30 PM) plus Tue/Wed/Fri/Sat 3:00 PM ET, and does not list active-roster IR/Suspended players; empty violation lists are not posted. **Active Roster: Can Be Demoted** is built for Sundays at 11:00 AM ET but defaults off (`MFL_SUNDAY_ACTIVE_ROSTER_DEMOTE_REPORT_ENABLED`); preview locally with `--active-roster-demote-report`. IR eligibility defaults exclude Questionable; override with `MFL_IR_ELIGIBLE_STATUSES` if the league’s IR setup is broader/narrower. Salary-cap checks use `leagueStandings.salary` vs franchise `salaryCapAmount`. Starting-roster checks compare active (non-IR/taxi) depth to `league.starters` minimums.
 8. **Empty weekly/Sunday lists** — Taxi Cut Cap Refunds Pending and Unpaid Owners / Traded Picks skip Discord when there is nothing to list (schedule cursors still advance).
-9. **Top scorers / slates** — `TYPE=nflSchedule` must use **`api.myfantasyleague.com`**. Sunday windows are kickoff-based (early = before 3:00 PM ET, i.e. 1:00 slates). Week points come from `TYPE=playerScores` merged with `TYPE=liveScoring` (`DETAILS=1`) because playerScores often omits Sunday players for hours after games are final. A slate posts only after every game in that window is final **and** at least one matching player has points. Cumulative waits for MNF (or posts at the Tuesday slot when there is no MNF). Local preview: `--top-scorers-report`.
+10. **Invalid roster on trade embeds** — pending trades simulate player moves (and salary totals) before IR/slot/cap/starter checks; processed trades use current rosters and standings. The section is omitted when neither side is in violation.
 
 ---
 

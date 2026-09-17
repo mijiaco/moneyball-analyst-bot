@@ -22,6 +22,14 @@ from src.mfl_client import (
     player_points_by_id,
     player_salaries_by_franchise,
 )
+from src.roster_violations import (
+    franchise_salaries_from_standings,
+    injury_status_by_player_id,
+)
+from src.trade_roster_check import (
+    append_trade_roster_warning,
+    post_trade_roster_warning_text,
+)
 from src.trade_notify import (
     format_trade_bait_text,
     format_trade_text,
@@ -99,6 +107,7 @@ async def poll_trades_for_new_messages(
     out: list[tuple[str, TradeMessagePayload]] = []
     updated = False
 
+    new_trades: list[tuple[str, dict[str, Any]]] = []
     for tx in transactions:
         if tx.get("type") != "TRADE":
             continue
@@ -118,6 +127,25 @@ async def poll_trades_for_new_messages(
             seen.add(key)
             updated = True
             continue
+        new_trades.append((key, tx))
+
+    injuries_by_id: dict[str, dict[str, str]] = {}
+    salary_totals: dict[str, float] = {}
+    if new_trades:
+        await mfl.sleep_between_exports()
+        try:
+            injuries_json = await mfl.fetch_injuries()
+        except Exception:
+            injuries_json = {}
+        await mfl.sleep_between_exports()
+        try:
+            standings_json = await mfl.fetch_league_standings()
+        except Exception:
+            standings_json = {}
+        injuries_by_id = injury_status_by_player_id(injuries_json)
+        salary_totals = franchise_salaries_from_standings(standings_json)
+
+    for key, tx in new_trades:
         body = format_trade_text(
             tx,
             franchise_names,
@@ -129,8 +157,20 @@ async def poll_trades_for_new_messages(
             accounting_balance_by_franchise=accounting_totals,
             unpaid_accounting_threshold=unpaid_threshold,
         )
-        if len(body) > DISCORD_DESCRIPTION_LIMIT:
-            body = body[: DISCORD_DESCRIPTION_LIMIT - 3] + "..."
+        warning = post_trade_roster_warning_text(
+            tx,
+            franchise_names=franchise_names,
+            players_map=players,
+            rosters_json=rosters_json,
+            league_json=league_json,
+            injuries_by_id=injuries_by_id,
+            salary_by_franchise=salary_totals,
+            player_salaries=salaries_by_franchise,
+            now_unix=now,
+        )
+        body = append_trade_roster_warning(
+            body, warning, limit=DISCORD_DESCRIPTION_LIMIT
+        )
         out.append((key, TradeMessagePayload(_TRADE_EMBED_TITLE, body, _TRADE_EMBED_COLOR)))
 
     if announce_trade_bait:

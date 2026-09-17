@@ -15,6 +15,7 @@ from src.roster_violations import (
     find_starter_requirement_violations,
     format_active_roster_can_be_demoted_report_text,
     format_roster_violations_report_text,
+    format_trade_parties_roster_violations_text,
     franchise_salaries_from_standings,
     franchise_salary_caps_from_league,
     injury_status_by_player_id,
@@ -331,3 +332,41 @@ def test_format_roster_violations_report_text_does_not_include_active_callout() 
     )
     assert "Active roster" not in text
     assert "Can Be Demoted" not in text
+
+
+def test_format_trade_parties_roster_violations_text_empty_when_other_teams_only() -> None:
+    text = format_trade_parties_roster_violations_text(
+        {"0001", "0002"},
+        {"0001": "Team A", "0002": "Team B", "0003": "Team C"},
+        [
+            IrEligibilityViolation(
+                franchise_id="0003",
+                player_id="1",
+                player_label="Other, Player FA RB",
+                injury_status="Questionable",
+                injury_details="",
+            )
+        ],
+        [],
+    )
+    assert text == ""
+
+
+def test_format_trade_parties_roster_violations_text_only_trade_sides() -> None:
+    text = format_trade_parties_roster_violations_text(
+        {"0002"},
+        {"0001": "Team A", "0002": "Team B"},
+        [],
+        [
+            SlotLimitViolation(
+                franchise_id="0002",
+                slot_name="active roster",
+                count=46,
+                limit=45,
+            )
+        ],
+    )
+    assert text.startswith("**Invalid roster after this trade**")
+    assert "**Team B**" in text
+    assert "Team A" not in text
+    assert "Slot limit: active roster 46 (limit 45)" in text
