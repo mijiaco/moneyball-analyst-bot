@@ -77,6 +77,27 @@ def player_ids_from_gave_up(
     return out
 
 
+def _franchise_rows(rosters_json: dict[str, Any]) -> list[dict[str, Any]]:
+    block = rosters_json.get("rosters") or {}
+    rows_raw = block.get("franchise")
+    if isinstance(rows_raw, list):
+        return [row for row in rows_raw if isinstance(row, dict)]
+    if isinstance(rows_raw, dict):
+        return [rows_raw]
+    return []
+
+
+def _player_id_set(franchise_row: dict[str, Any]) -> set[str]:
+    raw = franchise_row.get("player") or []
+    if isinstance(raw, dict):
+        rows = [raw]
+    elif isinstance(raw, list):
+        rows = [row for row in raw if isinstance(row, dict)]
+    else:
+        rows = []
+    return {str(row.get("id") or "") for row in rows if row.get("id") is not None}
+
+
 def _franchise_players(franchise_row: dict[str, Any]) -> list[dict[str, Any]]:
     raw = franchise_row.get("player") or []
     if isinstance(raw, list):
@@ -104,13 +125,8 @@ def apply_player_trade_to_rosters(
     this is a no-op for those ids.
     """
     applied = copy.deepcopy(rosters_json)
-    block = applied.get("rosters") or {}
-    rows_raw = block.get("franchise")
-    if isinstance(rows_raw, list):
-        franchise_rows = [row for row in rows_raw if isinstance(row, dict)]
-    elif isinstance(rows_raw, dict):
-        franchise_rows = [rows_raw]
-    else:
+    franchise_rows = _franchise_rows(applied)
+    if not franchise_rows:
         return applied
     by_id = {
         str(row.get("id")): row for row in franchise_rows if row.get("id") is not None
@@ -158,6 +174,33 @@ def _salary_amount(raw: str | None) -> float:
         return 0.0
 
 
+def _player_ids_still_on_sender(
+    rosters_json: dict[str, Any],
+    *,
+    sender_id: str,
+    receiver_id: str,
+    player_ids: list[str],
+) -> list[str]:
+    """Ids that still need a salary move: on sender, not already on receiver."""
+    by_id = {
+        str(row.get("id")): row
+        for row in _franchise_rows(rosters_json)
+        if row.get("id") is not None
+    }
+    sender = by_id.get(str(sender_id).strip())
+    receiver = by_id.get(str(receiver_id).strip())
+    if sender is None or receiver is None:
+        return []
+    on_sender = _player_id_set(sender)
+    on_receiver = _player_id_set(receiver)
+    still: list[str] = []
+    for player_id in player_ids:
+        if player_id in on_receiver or player_id not in on_sender:
+            continue
+        still.append(player_id)
+    return still
+
+
 def apply_player_trade_to_salaries(
     salary_by_franchise: dict[str, float],
     player_salaries: dict[str, dict[str, str]],
@@ -166,10 +209,30 @@ def apply_player_trade_to_salaries(
     player_ids_a_to_b: list[str],
     franchise_b: str,
     player_ids_b_to_a: list[str],
+    rosters_json: dict[str, Any] | None = None,
 ) -> dict[str, float]:
+    """
+    Shift standings salary for players still sitting on the sender.
+
+    If rosters already show the trade, this is a no-op so we do not double-count
+    leagueStandings totals that MFL updated during the pending/veto window.
+    """
     adjusted = dict(salary_by_franchise)
     a = str(franchise_a).strip()
     b = str(franchise_b).strip()
+    if rosters_json is not None:
+        player_ids_a_to_b = _player_ids_still_on_sender(
+            rosters_json,
+            sender_id=a,
+            receiver_id=b,
+            player_ids=player_ids_a_to_b,
+        )
+        player_ids_b_to_a = _player_ids_still_on_sender(
+            rosters_json,
+            sender_id=b,
+            receiver_id=a,
+            player_ids=player_ids_b_to_a,
+        )
     a_map = player_salaries.get(a) or {}
     b_map = player_salaries.get(b) or {}
     for player_id in player_ids_a_to_b:
@@ -238,6 +301,7 @@ def post_trade_roster_warning_text(
             player_ids_a_to_b=a_to_b,
             franchise_b=franchise_b,
             player_ids_b_to_a=b_to_a,
+            rosters_json=rosters_json,
         )
     slot_limits = league_slot_limits(league_json)
     return format_trade_parties_roster_violations_text(
