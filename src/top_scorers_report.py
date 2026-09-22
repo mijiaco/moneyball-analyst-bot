@@ -141,17 +141,27 @@ def top_scorers_dedupe_key(week_key: str, slate_id: str) -> str:
     return f"TOP_SCORERS|{week_key}|{slate_id}"
 
 
-def announced_top_scorer_slate_ids(seen: set[str]) -> set[str]:
-    """Slate ids that already have a Discord announcement key in seen."""
+def announced_top_scorer_slate_ids(seen: set[str], week_key: str) -> set[str]:
+    """Slate ids already announced for this scoring week (seen keys are week-scoped)."""
+    prefix = f"TOP_SCORERS|{week_key}|"
     announced: set[str] = set()
     for key in seen:
         text = str(key)
-        if not text.startswith("TOP_SCORERS|"):
+        if not text.startswith(prefix):
             continue
-        slate_id = text.rsplit("|", 1)[-1]
+        slate_id = text[len(prefix) :]
         if slate_id:
             announced.add(slate_id)
     return announced
+
+
+def unposted_due_top_scorer_slate_ids(
+    due_slates: list[str],
+    seen: set[str],
+    week_key: str,
+) -> list[str]:
+    announced = announced_top_scorer_slate_ids(seen, week_key)
+    return [slate_id for slate_id in due_slates if slate_id not in announced]
 
 
 def top_scorers_title(slate_id: str, *, week: str = "") -> str:

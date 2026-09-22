@@ -66,7 +66,6 @@ from src.roster_violations import (
 )
 from src.top_scorers_report import (
     TOP_SCORERS_COLOR,
-    announced_top_scorer_slate_ids,
     due_top_scorer_slate_ids,
     format_top_scorers_report_text,
     nfl_week_from_schedule,
@@ -78,6 +77,7 @@ from src.top_scorers_report import (
     top_scorers_by_position,
     top_scorers_dedupe_key,
     top_scorers_title,
+    unposted_due_top_scorer_slate_ids,
 )
 from src.taxi_cut_report import (
     TAXI_CUT_ALERT_COLOR,
@@ -688,16 +688,15 @@ async def _async_main() -> int:
                     for item in (reports_state.get("last_top_scorers_slots") or [])
                     if str(item).strip()
                 }
-                announced_slates = announced_top_scorer_slate_ids(seen)
-                maybe_unposted = [
-                    slate_id
-                    for slate_id in due_slates
-                    if slate_id not in announced_slates
-                ]
-                if maybe_unposted:
-                    await mfl.sleep_between_exports()
-                    schedule_json = await mfl.fetch_nfl_schedule()
-                    week = nfl_week_from_schedule(schedule_json)
+                await mfl.sleep_between_exports()
+                schedule_json = await mfl.fetch_nfl_schedule()
+                week = nfl_week_from_schedule(schedule_json)
+                games = parse_nfl_schedule_games(schedule_json)
+                week_key = scoring_week_key(year, week, games)
+                due_unposted = unposted_due_top_scorer_slate_ids(
+                    due_slates, seen, week_key
+                )
+                if due_unposted:
                     await mfl.sleep_between_exports()
                     scores_json = await mfl.fetch_player_scores_week(
                         week=week or None
@@ -706,8 +705,6 @@ async def _async_main() -> int:
                     live_json = await mfl.fetch_live_scoring(week=week or None)
                     await mfl.sleep_between_exports()
                     players_map = await mfl.get_players_map()
-                    games = parse_nfl_schedule_games(schedule_json)
-                    week_key = scoring_week_key(year, week, games)
                     scores = week_scores_from_exports(
                         scores_json, live_json, players_map
                     )

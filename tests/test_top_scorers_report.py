@@ -25,6 +25,7 @@ from src.top_scorers_report import (
     top_scorers_by_position,
     top_scorers_dedupe_key,
     top_scorers_title,
+    unposted_due_top_scorer_slate_ids,
     week_scores_from_exports,
 )
 
@@ -186,14 +187,33 @@ def test_top_scorers_sorts_and_limits() -> None:
     assert [row.player_id for row in ranked["RB"]] == ["2", "3", "1", "4", "5"]
 
 
-def test_announced_top_scorer_slate_ids_ignores_cursor_only_slots() -> None:
+def test_announced_top_scorer_slate_ids_is_week_scoped() -> None:
     seen = {
         "TOP_SCORERS|2026-W01|wed",
         "TOP_SCORERS|2026-W01|tnf",
+        "TOP_SCORERS|2026-W01|early_sun",
+        "TOP_SCORERS|2026-W01|late_sun",
+        "TOP_SCORERS|2026-W01|snf",
+        "TOP_SCORERS|2026-W01|mnf",
+        "TOP_SCORERS|2026-W01|cumulative",
         "ROSTER_VIOLATIONS|2026-09-13|15:30",
     }
-    assert announced_top_scorer_slate_ids(seen) == {"wed", "tnf"}
-    assert "early_sun" not in announced_top_scorer_slate_ids(seen)
+    assert announced_top_scorer_slate_ids(seen, "2026-W01") == {
+        "wed",
+        "tnf",
+        "early_sun",
+        "late_sun",
+        "snf",
+        "mnf",
+        "cumulative",
+    }
+    assert announced_top_scorer_slate_ids(seen, "2026-W02") == set()
+    assert unposted_due_top_scorer_slate_ids(
+        ["wed", "tnf", "early_sun"], seen, "2026-W02"
+    ) == ["wed", "tnf", "early_sun"]
+    assert unposted_due_top_scorer_slate_ids(
+        ["wed", "tnf", "early_sun"], seen, "2026-W01"
+    ) == []
     assert top_scorers_dedupe_key("2026-W01", "early_sun") == (
         "TOP_SCORERS|2026-W01|early_sun"
     )
