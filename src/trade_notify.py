@@ -345,6 +345,13 @@ def is_processed_trade(tx: dict[str, Any], now_unix: float | None = None) -> boo
     return expires_at <= now
 
 
+def _is_machine_gave_up_token(part: str) -> bool:
+    """True for player ids and MFL tokens such as DP_, FP_, BB_."""
+    if re.fullmatch(r"\d+", part) is not None:
+        return True
+    return re.fullmatch(r"[A-Z]{2,}_[A-Za-z0-9_]+", part) is not None
+
+
 def _split_gave_up(raw: str | None) -> list[str]:
     if not raw:
         return []
@@ -357,12 +364,7 @@ def _split_gave_up(raw: str | None) -> list[str]:
     if not comma_parts:
         return []
     # Only split on commas for machine-style tokens.
-    if all(
-        part.startswith("DP_")
-        or part.startswith("FP_")
-        or re.fullmatch(r"\d+", part) is not None
-        for part in comma_parts
-    ):
+    if all(_is_machine_gave_up_token(part) for part in comma_parts):
         return comma_parts
     return [text.rstrip(",")]
 
@@ -577,6 +579,8 @@ def format_asset_list(
             lines.append(format_draft_token(t, season_year))
         elif t.startswith("FP_"):
             lines.append(format_future_pick_token(t, franchise_names))
+        elif t.startswith("BB_"):
+            continue
         else:
             resolved_token = t
             label = players.get(t)
@@ -599,6 +603,8 @@ def format_asset_list(
             if suffix is not None:
                 label = f"{label} ({suffix})"
             lines.append(label)
+    if not lines:
+        return "* (nothing listed)"
     return "\n".join(f"* {line}" for line in lines)
 
 

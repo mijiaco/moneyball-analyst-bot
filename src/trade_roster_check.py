@@ -35,9 +35,8 @@ def _split_gave_up(raw: str | None) -> list[str]:
     if not comma_parts:
         return []
     if all(
-        part.startswith("DP_")
-        or part.startswith("FP_")
-        or re.fullmatch(r"\d+", part) is not None
+        re.fullmatch(r"\d+", part) is not None
+        or re.fullmatch(r"[A-Z]{2,}_[A-Za-z0-9_]+", part) is not None
         for part in comma_parts
     ):
         return comma_parts
@@ -65,7 +64,7 @@ def player_ids_from_gave_up(
 
     out: list[str] = []
     for token in _split_gave_up(gave_up):
-        if token.startswith("DP_") or token.startswith("FP_"):
+        if token.startswith("DP_") or token.startswith("FP_") or token.startswith("BB_"):
             continue
         if re.fullmatch(r"\d+", token):
             out.append(token)

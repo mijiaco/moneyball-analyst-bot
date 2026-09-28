@@ -52,6 +52,7 @@ def test_player_ids_from_gave_up_skips_picks() -> None:
     players = {"20": "Star, Player KC WR", "99": "Other, Player FA RB"}
     assert player_ids_from_gave_up("20,DP_2027_1_0002", players) == ["20"]
     assert player_ids_from_gave_up("Star, Player KC WR", players) == ["20"]
+    assert player_ids_from_gave_up("BB_0,20,99", players) == ["20", "99"]
 
 
 def test_apply_player_trade_to_rosters_moves_pending_player() -> None:

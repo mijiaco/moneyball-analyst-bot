@@ -584,6 +584,36 @@ def test_format_trade_text_salary_fallback_across_franchises() -> None:
     assert "* Dulcich, Greg MIA TE ($22 sal)" in text
 
 
+def test_format_trade_bait_text_splits_bb_prefix_player_ids() -> None:
+    tb = {
+        "franchise_id": "0013",
+        "willGiveUp": "BB_0,15394,13325,13288,14921,16913,15849,16736,16657",
+        "inExchangeFor": "Willing to trade one of those for a DE",
+    }
+    franchises = {"0013": "Gallica White Ermines"}
+    players = {
+        "15394": "Adebo, Paulson NYG CB",
+        "13325": "Woods, Xavier CHI S",
+        "13288": "Jenkins, Rayshawn PIT S",
+        "14921": "Dugger, Kyle CIN S",
+        "16913": "Woods, Charles NEP CB",
+        "15849": "McCreary, Roger DET CB",
+        "16736": "Brownlee, Jarvis NYJ CB",
+        "16657": "Dorlus, Brandon ATL DT",
+    }
+    text = format_trade_bait_text(tb, franchises, players, 2026)
+    assert "BB_0" not in text
+    assert "15394" not in text
+    assert "* Adebo, Paulson NYG CB" in text
+    assert "* Woods, Xavier CHI S" in text
+    assert "* Jenkins, Rayshawn PIT S" in text
+    assert "* Dugger, Kyle CIN S" in text
+    assert "* Woods, Charles NEP CB" in text
+    assert "* McCreary, Roger DET CB" in text
+    assert "* Brownlee, Jarvis NYJ CB" in text
+    assert "* Dorlus, Brandon ATL DT" in text
+
+
 def test_format_trade_bait_text_bullets_and_salary() -> None:
     tb = {
         "franchise_id": "0009",
