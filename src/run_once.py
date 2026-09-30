@@ -112,6 +112,19 @@ from src.trade_notify import (
     top_trader_counts,
     traded_own_future_pick_rounds_by_franchise,
 )
+from src.points_leaderboard_report import (
+    LOTTERY_BALLS_COLOR,
+    LOTTERY_BALLS_TITLE,
+    POINTS_LEADERBOARD_COLOR,
+    POINTS_LEADERBOARD_TITLE,
+    format_lottery_balls_report_text,
+    format_points_leaderboard_text,
+    lottery_ball_standings,
+    lottery_balls_dedupe_key,
+    points_leaderboard_dedupe_key,
+    rank_standings_best_to_worst,
+    standings_from_export,
+)
 from src.trade_poll_core import TradeMessagePayload, poll_trades_for_new_messages
 from src.weekly_claim import claim_weekly_reports_week, weekly_report_dedupe_key
 
@@ -192,6 +205,17 @@ def _current_week_key_et(now_et: datetime) -> str:
 def _is_weekly_reports_due(now_et: datetime) -> bool:
     # Saturday at/after 3:00 PM Eastern Time
     return now_et.weekday() == 5 and now_et.hour >= 15
+
+
+# 3:00 AM Central = 4:00 AM Eastern (CT stays one hour behind ET).
+_POINTS_LEADERBOARD_DUE_ET = (4, 0)
+
+
+def _is_points_leaderboard_due(now_et: datetime) -> bool:
+    """Tuesday at/after 3:00 AM Central."""
+    return now_et.weekday() == 1 and (now_et.hour, now_et.minute) >= (
+        _POINTS_LEADERBOARD_DUE_ET
+    )
 
 
 # weekday(): Mon=0 ... Sun=6
@@ -329,6 +353,9 @@ async def _async_main() -> int:
         "MFL_SUNDAY_ACTIVE_ROSTER_DEMOTE_REPORT_ENABLED", False
     )
     top_scorers_report_enabled = env_bool("MFL_TOP_SCORERS_REPORT_ENABLED", True)
+    points_leaderboard_report_enabled = env_bool(
+        "MFL_POINTS_LEADERBOARD_REPORT_ENABLED", True
+    )
     rfa_report_enabled = env_bool("MFL_RFA_REPORT_ENABLED", True)
     rfa_invalid_claim_alerts_enabled = env_bool(
         "MFL_RFA_INVALID_CLAIM_ALERTS_ENABLED", True
@@ -760,6 +787,60 @@ async def _async_main() -> int:
                             reports_state_path, reports_state
                         )
                         updated_reports_state = True
+
+        if points_leaderboard_report_enabled and _is_points_leaderboard_due(
+            schedule_now_et
+        ):
+            now_points = schedule_now_et
+            points_date = now_points.date().isoformat()
+            leaderboard_key = points_leaderboard_dedupe_key(points_date)
+            lottery_key = lottery_balls_dedupe_key(points_date)
+            if leaderboard_key not in seen or lottery_key not in seen:
+                await mfl.sleep_between_exports()
+                standings_json = await mfl.fetch_league_standings()
+                await mfl.sleep_between_exports()
+                league_json = await mfl.fetch_league()
+                franchise_names = franchise_names_from_league(league_json)
+                ranked = rank_standings_best_to_worst(
+                    standings_from_export(standings_json),
+                    franchise_names,
+                )
+                if ranked:
+                    as_of_points = f"As of {_as_of_label_et(now_points)}"
+                    report_specs = (
+                        (
+                            leaderboard_key,
+                            POINTS_LEADERBOARD_TITLE,
+                            format_points_leaderboard_text(ranked, franchise_names),
+                            POINTS_LEADERBOARD_COLOR,
+                        ),
+                        (
+                            lottery_key,
+                            LOTTERY_BALLS_TITLE,
+                            format_lottery_balls_report_text(
+                                lottery_ball_standings(ranked),
+                                franchise_names,
+                            ),
+                            LOTTERY_BALLS_COLOR,
+                        ),
+                    )
+                    for report_key, title, report_text, color in report_specs:
+                        if report_key in seen:
+                            continue
+                        body = (
+                            report_text.split("\n\n", 1)[1]
+                            if "\n\n" in report_text
+                            else report_text
+                        )
+                        description = f"{as_of_points}\n\n{body}"
+                        if len(description) > 4096:
+                            description = description[:4093] + "..."
+                        pending_posts.append(
+                            (
+                                report_key,
+                                TradeMessagePayload(title, description, color),
+                            )
+                        )
 
         if rfa_report_enabled:
             now_rfa = schedule_now_et

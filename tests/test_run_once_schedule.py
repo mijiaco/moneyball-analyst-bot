@@ -102,6 +102,24 @@ def test_sunday_unpaid_report_due_sunday_after_1300(
 @pytest.mark.parametrize(
     "when, hour, minute, expected",
     [
+        ("2026-10-06", 3, 59, False),  # Tue 3:59 AM ET (2:59 AM CT)
+        ("2026-10-06", 4, 0, True),  # Tue 4:00 AM ET (3:00 AM CT)
+        ("2026-10-06", 15, 0, True),
+        ("2026-10-05", 4, 0, False),  # Mon
+        ("2026-10-07", 4, 0, False),  # Wed
+    ],
+)
+def test_points_leaderboard_due_tuesday_after_0300_ct(
+    when: str, hour: int, minute: int, expected: bool
+) -> None:
+    y, m, d = (int(p) for p in when.split("-"))
+    now_et = datetime(y, m, d, hour, minute, tzinfo=ET)
+    assert ro._is_points_leaderboard_due(now_et) is expected
+
+
+@pytest.mark.parametrize(
+    "when, hour, minute, expected",
+    [
         ("2026-04-19", 10, 59, False),  # Sun before 11:00 AM
         ("2026-04-19", 11, 0, True),
         ("2026-04-19", 18, 0, True),
