@@ -22,6 +22,7 @@ from src.mfl_client import (
     accounting_balance_by_franchise,
     draft_picks_by_franchise,
     franchise_names_from_league,
+    player_points_by_id,
     player_salaries_by_franchise,
 )
 from src.mfl_env import (
@@ -111,6 +112,15 @@ from src.trade_notify import (
     save_seen,
     top_trader_counts,
     traded_own_future_pick_rounds_by_franchise,
+)
+from src.draft_notify import selected_draft_picks_from_results
+from src.top_rookie_report import (
+    TOP_ROOKIE_BY_ROUND_COLOR,
+    TOP_ROOKIE_BY_ROUND_TITLE,
+    format_top_rookie_by_round_text,
+    last_completed_nfl_week,
+    top_rookie_dedupe_key,
+    top_rookies_by_round,
 )
 from src.points_leaderboard_report import (
     LOTTERY_BALLS_COLOR,
@@ -355,6 +365,9 @@ async def _async_main() -> int:
     top_scorers_report_enabled = env_bool("MFL_TOP_SCORERS_REPORT_ENABLED", True)
     points_leaderboard_report_enabled = env_bool(
         "MFL_POINTS_LEADERBOARD_REPORT_ENABLED", True
+    )
+    top_rookie_report_enabled = env_bool(
+        "MFL_TOP_ROOKIE_BY_ROUND_REPORT_ENABLED", True
     )
     rfa_report_enabled = env_bool("MFL_RFA_REPORT_ENABLED", True)
     rfa_invalid_claim_alerts_enabled = env_bool(
@@ -788,14 +801,17 @@ async def _async_main() -> int:
                         )
                         updated_reports_state = True
 
-        if points_leaderboard_report_enabled and _is_points_leaderboard_due(
-            schedule_now_et
+        if _is_points_leaderboard_due(schedule_now_et) and (
+            points_leaderboard_report_enabled or top_rookie_report_enabled
         ):
             now_points = schedule_now_et
             points_date = now_points.date().isoformat()
             leaderboard_key = points_leaderboard_dedupe_key(points_date)
             lottery_key = lottery_balls_dedupe_key(points_date)
-            if leaderboard_key not in seen or lottery_key not in seen:
+            rookie_key = top_rookie_dedupe_key(points_date)
+            if points_leaderboard_report_enabled and (
+                leaderboard_key not in seen or lottery_key not in seen
+            ):
                 await mfl.sleep_between_exports()
                 standings_json = await mfl.fetch_league_standings()
                 await mfl.sleep_between_exports()
@@ -839,6 +855,62 @@ async def _async_main() -> int:
                             (
                                 report_key,
                                 TradeMessagePayload(title, description, color),
+                            )
+                        )
+
+            if top_rookie_report_enabled and rookie_key not in seen:
+                await mfl.sleep_between_exports()
+                schedule_json = await mfl.fetch_nfl_schedule()
+                week = nfl_week_from_schedule(schedule_json)
+                games = parse_nfl_schedule_games(schedule_json)
+                current_week_is_final = bool(games) and all(
+                    game.is_final for game in games
+                )
+                last_week = last_completed_nfl_week(
+                    week, current_week_is_final=current_week_is_final
+                )
+                if last_week is not None:
+                    points_by_player: dict[str, float] = {}
+                    for week_number in range(1, last_week + 1):
+                        await mfl.sleep_between_exports()
+                        week_scores = await mfl.fetch_player_scores_week(
+                            week=str(week_number)
+                        )
+                        for player_id, points in player_points_by_id(
+                            week_scores
+                        ).items():
+                            points_by_player[player_id] = (
+                                points_by_player.get(player_id, 0.0) + points
+                            )
+                    await mfl.sleep_between_exports()
+                    draft_json = await mfl.fetch_draft_results()
+                    await mfl.sleep_between_exports()
+                    rookie_players = await mfl.get_players_map()
+                    leaders = top_rookies_by_round(
+                        selected_draft_picks_from_results(draft_json),
+                        points_by_player,
+                        rookie_players,
+                    )
+                    if leaders:
+                        rookie_text = format_top_rookie_by_round_text(leaders)
+                        rookie_body = (
+                            rookie_text.split("\n\n", 1)[1]
+                            if "\n\n" in rookie_text
+                            else rookie_text
+                        )
+                        rookie_description = (
+                            f"As of {_as_of_label_et(now_points)}\n\n{rookie_body}"
+                        )
+                        if len(rookie_description) > 4096:
+                            rookie_description = rookie_description[:4093] + "..."
+                        pending_posts.append(
+                            (
+                                rookie_key,
+                                TradeMessagePayload(
+                                    TOP_ROOKIE_BY_ROUND_TITLE,
+                                    rookie_description,
+                                    TOP_ROOKIE_BY_ROUND_COLOR,
+                                ),
                             )
                         )
 

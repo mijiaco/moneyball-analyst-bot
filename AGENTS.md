@@ -11,7 +11,7 @@ Instructions for AI assistants and developers working in this repository.
 - Posts optional **Roster Violations** embeds on Thu/Sun/Mon ET slots (Thu/Mon 7:30 PM; Sun 12:15 / 3:30 / 7:30 PM) plus Tue/Wed/Fri/Sat at 3:00 PM ET.
 - Posts optional Sunday **Active Roster: Can Be Demoted** embed (11:00 AM ET) when enabled; default off — use local dry-run preview.
 - Posts optional **Top Scorers** embeds after NFL slates (Wed/TNF, Sun 4:15 / 8:00 / 11:45 PM ET; Tue 12:30 AM ET for MNF + week cumulative).
-- Posts optional **Points Leaderboard** and **Lottery Balls** embeds every Tuesday at 3:00 AM CT (4:00 AM ET).
+- Posts optional **Points Leaderboard**, **Lottery Balls**, and **Top Rookie by Round** embeds every Tuesday at 3:00 AM CT (4:00 AM ET).
 - Posts immediate **taxi squad cut** alerts when a taxi player is dropped and dead-money hits the cap (commish refund needed).
 - Persists **dedupe state** in `data/seen_trades.json`, optional weekly report cursor in `data/reports_state.json`, and RFA state in `data/rfa_state.json` so repeats are not announced.
 - **Primary runtime:** GitHub Actions workflow `scheduled-export` running `python -m src.run_once` (no long-lived server required).
@@ -37,6 +37,7 @@ Do **not** commit secrets, `.env`, or API keys. Never overwrite `.env` without e
 | `src/taxi_cut_report.py` | Taxi-squad cut dead-money detection, refund matching, immediate + weekly Discord formatters. |
 | `src/top_scorers_report.py` | NFL-slate and weekly-cumulative top-5 scorers by position (league scoring). |
 | `src/points_leaderboard_report.py` | Tuesday season points leaderboard (#1–#32) and lottery balls for the worst 8 teams. |
+| `src/top_rookie_report.py` | Tuesday top scorer from each round of the current-year draft, with that round's average. |
 | `src/google_sheets.py` | Service-account Sheets read (top 32) + write (RFA tab). |
 | `src/bot.py` | Optional Discord.py bot. |
 | `.github/workflows/scheduled-export.yml` | Actions workflow: dispatch-only triggers, env wiring, Contents API commit for state files. |
@@ -87,6 +88,7 @@ Share the spreadsheet with the service account email (Editor).
 - `MFL_SUNDAY_ACTIVE_ROSTER_DEMOTE_REPORT_ENABLED` — default false (Sunday 11:00 AM ET Active Roster: Can Be Demoted; keep off for public Discord; local preview via `python -m src.trade_notify --dry-run --active-roster-demote-report`)
 - `MFL_TOP_SCORERS_REPORT_ENABLED` — default true (slate top-5 by position; preview via `python -m src.trade_notify --dry-run --top-scorers-report`)
 - `MFL_POINTS_LEADERBOARD_REPORT_ENABLED` — default true (Tuesday 3:00 AM CT points leaderboard, then lottery balls for the worst 8 by points)
+- `MFL_TOP_ROOKIE_BY_ROUND_REPORT_ENABLED` — default true (same Tuesday slot; top scorer in each current-year draft round, using completed NFL weeks only)
 - `MFL_WEEKLY_REPORTS_INCLUDE_TAXI_CUT_REFUNDS` — default true (Saturday list of unreimbursed taxi-cut dead money)
 - `MFL_TAXI_CUT_ALERTS_ENABLED` — default true (immediate Discord alert on taxi cut)
 - `MFL_TAXI_CUT_LOOKBACK_DAYS` — defaults to `MFL_TRADE_LOOKBACK_DAYS`
@@ -218,7 +220,7 @@ python3 -m src.bot                   # optional; needs env
 7. **Taxi-cut refund still listed after commish cleared cap** — refund matching accepts a franchise **−$amount** adjustment equal to dead money, **or** removal of the originating `Dropped …` salary adjustment. Deleting the charge (with no negative line) should clear `pending_cuts` on the next poll.
 7. **Roster violations / injuries** — `TYPE=injuries` must use **`api.myfantasyleague.com`** (league host returns an error). Roster Violations posts on Thu/Sun/Mon ET slots (Thu/Mon 7:30 PM; Sun 12:15 / 3:30 / 7:30 PM) plus Tue/Wed/Fri/Sat 3:00 PM ET, and does not list active-roster IR/Suspended players; empty violation lists are not posted. **Active Roster: Can Be Demoted** is built for Sundays at 11:00 AM ET but defaults off (`MFL_SUNDAY_ACTIVE_ROSTER_DEMOTE_REPORT_ENABLED`); preview locally with `--active-roster-demote-report`. IR eligibility defaults exclude Questionable; override with `MFL_IR_ELIGIBLE_STATUSES` if the league’s IR setup is broader/narrower. Salary-cap checks use `leagueStandings.salary` vs franchise `salaryCapAmount`. Starting-roster checks compare active (non-IR/taxi) depth to `league.starters` minimums.
 8. **Empty weekly/Sunday lists** — Taxi Cut Cap Refunds Pending and Unpaid Owners / Traded Picks skip Discord when there is nothing to list (schedule cursors still advance).
-9. **Points leaderboard / lottery balls** — Tuesday at/after 3:00 AM CT (4:00 AM ET). Season points and head-to-head record come from `TYPE=leagueStandings` (`pf`, `h2hw` / `h2hl` / `h2ht`). Best-to-worst is points, then record, then team name. The worst 8 get 8 balls down to 1. Dedupe keys are `POINTS_LEADERBOARD|{YYYY-MM-DD}` and `LOTTERY_BALLS|{YYYY-MM-DD}` for that Tuesday.
+9. **Points leaderboard / lottery balls / top rookie by round** — Tuesday at/after 3:00 AM CT (4:00 AM ET). Season points and head-to-head record come from `TYPE=leagueStandings` (`pf`, `h2hw` / `h2hl` / `h2ht`). Best-to-worst is points, then record, then team name. The worst 8 get 8 balls down to 1. Dedupe keys are `POINTS_LEADERBOARD|{YYYY-MM-DD}` and `LOTTERY_BALLS|{YYYY-MM-DD}` for that Tuesday. Top Rookie by Round uses the current-year `draftResults` and sums `playerScores` for weeks 1 through the last fully final NFL week (an in-progress week is left out). Each line is that round's top scorer and the average of every pick in the round, including zeros. Dedupe key is `TOP_ROOKIE_BY_ROUND|{YYYY-MM-DD}`.
 10. **Top scorers / slates** — `TYPE=nflSchedule` must use **`api.myfantasyleague.com`**. Sunday windows are kickoff-based (early = before 3:00 PM ET, i.e. 1:00 slates). Week points come from `TYPE=playerScores` merged with `TYPE=liveScoring` (`DETAILS=1`) because playerScores often omits Sunday players for hours after games are final. A slate posts only after every game in that window is final **and** at least one matching player has points. Dedupe keys are `TOP_SCORERS|{year}-W{week}|{slate}`; week 1 keys must not suppress week 2+. Cumulative waits for MNF (or posts at the Tuesday slot when there is no MNF). Local preview: `--top-scorers-report`.
 11. **Invalid roster on trade embeds** — pending trades simulate player moves (and salary totals) before IR/slot/cap/starter checks; salary is only shifted for players still on the sender so already-updated `leagueStandings` totals are not double-counted during the veto window. Processed trades use current rosters and standings. The section is omitted when neither side is in violation.
 
