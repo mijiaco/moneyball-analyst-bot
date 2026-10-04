@@ -120,6 +120,24 @@ def test_points_leaderboard_due_tuesday_after_0300_ct(
 @pytest.mark.parametrize(
     "when, hour, minute, expected",
     [
+        ("2026-10-06", 9, 59, False),  # Tue 9:59 AM ET (8:59 AM CT)
+        ("2026-10-06", 10, 0, True),  # Tue 10:00 AM ET (9:00 AM CT)
+        ("2026-10-06", 15, 0, True),
+        ("2026-10-05", 10, 0, False),  # Mon
+        ("2026-10-07", 10, 0, False),  # Wed
+    ],
+)
+def test_playoff_picture_due_tuesday_after_0900_ct(
+    when: str, hour: int, minute: int, expected: bool
+) -> None:
+    y, m, d = (int(p) for p in when.split("-"))
+    now_et = datetime(y, m, d, hour, minute, tzinfo=ET)
+    assert ro._is_playoff_picture_due(now_et) is expected
+
+
+@pytest.mark.parametrize(
+    "when, hour, minute, expected",
+    [
         ("2026-04-19", 10, 59, False),  # Sun before 11:00 AM
         ("2026-04-19", 11, 0, True),
         ("2026-04-19", 18, 0, True),

@@ -122,6 +122,15 @@ from src.top_rookie_report import (
     top_rookie_dedupe_key,
     top_rookies_by_round,
 )
+from src.playoff_picture_report import (
+    FIRST_ROUND_BYE_COUNT,
+    PLAYOFF_PICTURE_COLOR,
+    PLAYOFF_PICTURE_TITLE,
+    format_playoff_picture_text,
+    playoff_picture_dedupe_key,
+    playoff_teams_from_exports,
+    seed_playoff_picture,
+)
 from src.points_leaderboard_report import (
     LOTTERY_BALLS_COLOR,
     LOTTERY_BALLS_TITLE,
@@ -225,6 +234,17 @@ def _is_points_leaderboard_due(now_et: datetime) -> bool:
     """Tuesday at/after 3:00 AM Central."""
     return now_et.weekday() == 1 and (now_et.hour, now_et.minute) >= (
         _POINTS_LEADERBOARD_DUE_ET
+    )
+
+
+# 9:00 AM Central = 10:00 AM Eastern (CT stays one hour behind ET).
+_PLAYOFF_PICTURE_DUE_ET = (10, 0)
+
+
+def _is_playoff_picture_due(now_et: datetime) -> bool:
+    """Tuesday at/after 9:00 AM Central."""
+    return now_et.weekday() == 1 and (now_et.hour, now_et.minute) >= (
+        _PLAYOFF_PICTURE_DUE_ET
     )
 
 
@@ -368,6 +388,9 @@ async def _async_main() -> int:
     )
     top_rookie_report_enabled = env_bool(
         "MFL_TOP_ROOKIE_BY_ROUND_REPORT_ENABLED", True
+    )
+    playoff_picture_report_enabled = env_bool(
+        "MFL_PLAYOFF_PICTURE_REPORT_ENABLED", True
     )
     rfa_report_enabled = env_bool("MFL_RFA_REPORT_ENABLED", True)
     rfa_invalid_claim_alerts_enabled = env_bool(
@@ -913,6 +936,49 @@ async def _async_main() -> int:
                                 ),
                             )
                         )
+
+        if _is_playoff_picture_due(schedule_now_et) and playoff_picture_report_enabled:
+            now_playoff = schedule_now_et
+            playoff_date = now_playoff.date().isoformat()
+            playoff_key = playoff_picture_dedupe_key(playoff_date)
+            if playoff_key not in seen:
+                await mfl.sleep_between_exports()
+                standings_json = await mfl.fetch_standings()
+                await mfl.sleep_between_exports()
+                league_json = await mfl.fetch_league()
+                franchise_names = franchise_names_from_league(league_json)
+                seeded = seed_playoff_picture(
+                    playoff_teams_from_exports(standings_json, league_json),
+                    franchise_names,
+                )
+                if seeded:
+                    bye_count = sum(1 for row in seeded if row.has_first_round_bye)
+                    if bye_count != FIRST_ROUND_BYE_COUNT:
+                        logger.warning(
+                            "Playoff picture bye count is %s; rulebook expects %s "
+                            "division winners",
+                            bye_count,
+                            FIRST_ROUND_BYE_COUNT,
+                        )
+                    report_text = format_playoff_picture_text(seeded, franchise_names)
+                    body = (
+                        report_text.split("\n\n", 1)[1]
+                        if "\n\n" in report_text
+                        else report_text
+                    )
+                    description = f"As of {_as_of_label_et(now_playoff)}\n\n{body}"
+                    if len(description) > 4096:
+                        description = description[:4093] + "..."
+                    pending_posts.append(
+                        (
+                            playoff_key,
+                            TradeMessagePayload(
+                                PLAYOFF_PICTURE_TITLE,
+                                description,
+                                PLAYOFF_PICTURE_COLOR,
+                            ),
+                        )
+                    )
 
         if rfa_report_enabled:
             now_rfa = schedule_now_et
