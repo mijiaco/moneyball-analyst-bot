@@ -255,8 +255,8 @@ _ROSTER_VIOLATIONS_SLOTS_BY_WEEKDAY: dict[int, tuple[tuple[int, int], ...]] = {
     2: ((15, 0),),  # Wednesday 3:00 PM ET
     3: ((19, 30),),  # Thursday 7:30 PM ET
     4: ((15, 0),),  # Friday 3:00 PM ET
-    5: ((15, 0),),  # Saturday 3:00 PM ET
-    6: ((12, 15), (15, 30), (19, 30)),  # Sunday 12:15 / 3:30 / 7:30 PM ET
+    5: ((15, 0), (21, 0)),  # Saturday 3:00 PM ET and 9:00 PM ET (8:00 PM CT)
+    6: ((10, 0), (12, 15), (15, 30), (19, 30)),  # Sunday 10:00 AM ET (9:00 AM CT), then 12:15 / 3:30 / 7:30 PM ET
 }
 
 
