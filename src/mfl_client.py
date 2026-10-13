@@ -104,8 +104,19 @@ class MflClient:
         data = await self._get_json({"TYPE": "league"})
         return data if isinstance(data, dict) else {}
 
-    async def fetch_rosters(self) -> dict[str, Any]:
-        data = await self._get_json({"TYPE": "rosters"})
+    async def fetch_rosters(self, *, week: str | None = None) -> dict[str, Any]:
+        params: dict[str, str] = {"TYPE": "rosters"}
+        if week is not None and str(week).strip():
+            params["W"] = str(week).strip()
+        data = await self._get_json(params)
+        return data if isinstance(data, dict) else {}
+
+    async def fetch_weekly_results(self, *, week: str | None = None) -> dict[str, Any]:
+        """Weekly franchise scores. W omitted returns the current week."""
+        params: dict[str, str] = {"TYPE": "weeklyResults"}
+        if week is not None and str(week).strip():
+            params["W"] = str(week).strip()
+        data = await self._get_json(params)
         return data if isinstance(data, dict) else {}
 
     async def fetch_trade_baits(self) -> list[dict[str, Any]]:

@@ -70,6 +70,7 @@ from src.top_scorers_report import (
     due_top_scorer_slate_ids,
     format_top_scorers_report_text,
     nfl_week_from_schedule,
+    parse_live_scoring_points,
     parse_nfl_schedule_games,
     week_scores_from_exports,
     scores_for_slate,
@@ -121,6 +122,16 @@ from src.top_rookie_report import (
     last_completed_nfl_week,
     top_rookie_dedupe_key,
     top_rookies_by_round,
+)
+from src.positional_average_report import (
+    POSITIONAL_AVERAGES_COLOR,
+    bye_adjustments_for_franchises,
+    format_positional_averages_text,
+    positional_averages_dedupe_key,
+    positional_averages_for_playing_teams,
+    positional_averages_title,
+    team_position_scores_from_exports,
+    week_scores_by_franchise,
 )
 from src.playoff_picture_report import (
     FIRST_ROUND_BYE_COUNT,
@@ -391,6 +402,9 @@ async def _async_main() -> int:
     )
     playoff_picture_report_enabled = env_bool(
         "MFL_PLAYOFF_PICTURE_REPORT_ENABLED", True
+    )
+    positional_averages_report_enabled = env_bool(
+        "MFL_POSITIONAL_AVERAGES_REPORT_ENABLED", True
     )
     rfa_report_enabled = env_bool("MFL_RFA_REPORT_ENABLED", True)
     rfa_invalid_claim_alerts_enabled = env_bool(
@@ -936,6 +950,104 @@ async def _async_main() -> int:
                                 ),
                             )
                         )
+
+        if (
+            _is_points_leaderboard_due(schedule_now_et)
+            and positional_averages_report_enabled
+        ):
+            now_averages = schedule_now_et
+            await mfl.sleep_between_exports()
+            schedule_json = await mfl.fetch_nfl_schedule()
+            current_week = nfl_week_from_schedule(schedule_json)
+            games = parse_nfl_schedule_games(schedule_json)
+            current_week_is_final = bool(games) and all(
+                game.is_final for game in games
+            )
+            week_num = last_completed_nfl_week(
+                current_week, current_week_is_final=current_week_is_final
+            )
+            if week_num is not None:
+                week_text = str(week_num)
+                averages_key = positional_averages_dedupe_key(year, week_text)
+                if averages_key not in seen:
+                    if week_text != str(current_week).strip():
+                        await mfl.sleep_between_exports()
+                        schedule_json = await mfl.fetch_nfl_schedule(week=week_text)
+                        games = parse_nfl_schedule_games(schedule_json)
+                    week_is_final = bool(games) and all(
+                        game.is_final for game in games
+                    )
+                    if week_is_final:
+                        playing_teams = {
+                            team_id
+                            for game in games
+                            for team_id in game.team_ids
+                        }
+                        await mfl.sleep_between_exports()
+                        scores_json = await mfl.fetch_player_scores_week(week=week_text)
+                        live_points: dict[str, float] = {}
+                        if week_text == str(current_week).strip():
+                            await mfl.sleep_between_exports()
+                            live_json = await mfl.fetch_live_scoring(week=week_text)
+                            live_points = parse_live_scoring_points(live_json)
+                        await mfl.sleep_between_exports()
+                        averages_players = await mfl.get_players_map()
+                        averages = positional_averages_for_playing_teams(
+                            team_position_scores_from_exports(
+                                scores_json,
+                                averages_players,
+                                live_points,
+                            ),
+                            playing_teams,
+                        )
+                        if averages:
+                            await mfl.sleep_between_exports()
+                            averages_league = await mfl.fetch_league()
+                            franchise_names = franchise_names_from_league(
+                                averages_league
+                            )
+                            await mfl.sleep_between_exports()
+                            averages_rosters = await mfl.fetch_rosters(week=week_text)
+                            await mfl.sleep_between_exports()
+                            weekly_json = await mfl.fetch_weekly_results(
+                                week=week_text
+                            )
+                            adjustments = bye_adjustments_for_franchises(
+                                averages_rosters,
+                                averages_players,
+                                playing_teams,
+                                averages,
+                                week_scores_by_franchise(weekly_json),
+                                franchise_names,
+                            )
+                            averages_text = format_positional_averages_text(
+                                averages,
+                                week=week_text,
+                                adjustments=adjustments,
+                            )
+                            averages_body = (
+                                averages_text.split("\n\n", 1)[1]
+                                if "\n\n" in averages_text
+                                else averages_text
+                            )
+                            averages_description = (
+                                f"As of {_as_of_label_et(now_averages)}\n\n"
+                                f"{averages_body}"
+                            )
+                            if len(averages_description) > 4096:
+                                averages_description = (
+                                    averages_description[:4093] + "..."
+                                )
+                            pending_posts.append(
+                                (
+                                    averages_key,
+                                    TradeMessagePayload(
+                                        positional_averages_title(week_text),
+                                        averages_description,
+                                        POSITIONAL_AVERAGES_COLOR,
+                                    ),
+                                )
+                            )
 
         if _is_playoff_picture_due(schedule_now_et) and playoff_picture_report_enabled:
             now_playoff = schedule_now_et
