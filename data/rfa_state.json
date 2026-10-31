@@ -1,14 +1,14 @@
 {
   "active_rfas": {
     "14071": {
-      "cut_by_franchise_id": "0011",
-      "cut_by_name": "The Lord of the TD's",
+      "cut_by_franchise_id": "0018",
+      "cut_by_name": "The Purple Curtain",
       "cut_ts": 1793454948,
       "last_salary": "123"
     }
   },
   "last_rfa_weekly_week_key": "2026-W44",
-  "list_fingerprint": "bf56ad30f5f49c3dba4aec1f412a536be42b39cd7281bb49795fe5b43e42b9d7",
+  "list_fingerprint": "c08cf83ff5140a7dc66e84a0ad29449f27468669453c38aa3fda1c4929a4d805",
   "roster_salary_snapshot": {
     "0001": {
       "0651": "85",
