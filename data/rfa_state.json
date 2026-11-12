@@ -1,14 +1,7 @@
 {
-  "active_rfas": {
-    "14210": {
-      "cut_by_franchise_id": "0018",
-      "cut_by_name": "The Purple Curtain",
-      "cut_ts": 1794347829,
-      "last_salary": "43"
-    }
-  },
+  "active_rfas": {},
   "last_rfa_weekly_week_key": "2026-W45",
-  "list_fingerprint": "7bff061f27cd84ef7d28170f7af2cfac8bfb03e81fa3edb87864aa151399f221",
+  "list_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
   "roster_salary_snapshot": {
     "0001": {
       "0651": "85",
@@ -109,6 +102,7 @@
       "13448": "3",
       "14095": "26",
       "14147": "61",
+      "14210": "1",
       "14800": "80",
       "14870": "29",
       "14901": "1",
@@ -1613,5 +1607,7 @@
       "17813": "1"
     }
   },
-  "seen_invalid_claims": []
+  "seen_invalid_claims": [
+    "INVALID_RFA|14210|0003|1794455752|1.0|43.0"
+  ]
 }
