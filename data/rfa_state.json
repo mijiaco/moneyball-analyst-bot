@@ -1,7 +1,14 @@
 {
-  "active_rfas": {},
+  "active_rfas": {
+    "14210": {
+      "cut_by_franchise_id": "0003",
+      "cut_by_name": "Gibbs Me the Ring Precious",
+      "cut_ts": 1794460361,
+      "last_salary": "1"
+    }
+  },
   "last_rfa_weekly_week_key": "2026-W45",
-  "list_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "list_fingerprint": "24d412b178fac58af07e12bc82a44faa5bb0881586dfad650aac66bdf86986c6",
   "roster_salary_snapshot": {
     "0001": {
       "0651": "85",
@@ -103,7 +110,6 @@
       "13448": "3",
       "14095": "26",
       "14147": "61",
-      "14210": "1",
       "14800": "80",
       "14870": "29",
       "14901": "1",
