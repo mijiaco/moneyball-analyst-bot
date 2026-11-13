@@ -133,6 +133,13 @@ from src.positional_average_report import (
     team_position_scores_from_exports,
     week_scores_by_franchise,
 )
+from src.bowl_bracket_report import (
+    BOWL_BRACKET_COLOR,
+    BOWL_BRACKET_TITLE,
+    LEAGUE_TEAM_COUNT,
+    bowl_bracket_dedupe_key,
+    format_bowl_bracket_text,
+)
 from src.playoff_picture_report import (
     FIRST_ROUND_BYE_COUNT,
     PLAYOFF_PICTURE_COLOR,
@@ -402,6 +409,9 @@ async def _async_main() -> int:
     )
     playoff_picture_report_enabled = env_bool(
         "MFL_PLAYOFF_PICTURE_REPORT_ENABLED", True
+    )
+    bowl_bracket_report_enabled = env_bool(
+        "MFL_BOWL_BRACKET_REPORT_ENABLED", True
     )
     positional_averages_report_enabled = env_bool(
         "MFL_POSITIONAL_AVERAGES_REPORT_ENABLED", True
@@ -1091,6 +1101,44 @@ async def _async_main() -> int:
                             ),
                         )
                     )
+
+        if _is_playoff_picture_due(schedule_now_et) and bowl_bracket_report_enabled:
+            now_bowls = schedule_now_et
+            bowl_key = bowl_bracket_dedupe_key(now_bowls.date().isoformat())
+            if bowl_key not in seen:
+                await mfl.sleep_between_exports()
+                bowl_standings = await mfl.fetch_standings()
+                await mfl.sleep_between_exports()
+                bowl_league = await mfl.fetch_league()
+                bowl_names = franchise_names_from_league(bowl_league)
+                bowl_teams = playoff_teams_from_exports(bowl_standings, bowl_league)
+                if len(bowl_teams) != LEAGUE_TEAM_COUNT:
+                    logger.warning(
+                        "Bowl brackets skipped: standings have %s teams; expected %s",
+                        len(bowl_teams),
+                        LEAGUE_TEAM_COUNT,
+                    )
+                else:
+                    report_text = format_bowl_bracket_text(bowl_teams, bowl_names)
+                    if report_text:
+                        body = (
+                            report_text.split("\n\n", 1)[1]
+                            if "\n\n" in report_text
+                            else report_text
+                        )
+                        description = f"As of {_as_of_label_et(now_bowls)}\n\n{body}"
+                        if len(description) > 4096:
+                            description = description[:4093] + "..."
+                        pending_posts.append(
+                            (
+                                bowl_key,
+                                TradeMessagePayload(
+                                    BOWL_BRACKET_TITLE,
+                                    description,
+                                    BOWL_BRACKET_COLOR,
+                                ),
+                            )
+                        )
 
         if rfa_report_enabled:
             now_rfa = schedule_now_et

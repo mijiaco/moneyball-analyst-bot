@@ -57,6 +57,8 @@ from src.trade_roster_check import (
     append_trade_roster_warning,
     post_trade_roster_warning_text,
 )
+from src.bowl_bracket_report import format_bowl_bracket_text
+from src.playoff_picture_report import playoff_teams_from_exports
 from src.top_scorers_report import (
     SLATE_PROCESS_ORDER,
     format_top_scorers_report_text,
@@ -1227,6 +1229,7 @@ async def dry_run(
     active_roster_demote_report_only: bool = False,
     top_scorers_report_only: bool = False,
     traded_2027_picks_report_only: bool = False,
+    bowl_bracket_report_only: bool = False,
 ) -> int:
     _dotenv_path = Path(__file__).resolve().parent.parent / ".env"
     load_dotenv(_dotenv_path, override=True)
@@ -1263,6 +1266,25 @@ async def dry_run(
     )
     assets_json: dict[str, Any] = {}
     try:
+        if bowl_bracket_report_only:
+            standings_json = await client.fetch_standings()
+            await client.sleep_between_exports()
+            league_json = await client.fetch_league()
+            franchise_names = franchise_names_from_league(league_json)
+            teams = playoff_teams_from_exports(standings_json, league_json)
+            report_text = format_bowl_bracket_text(teams, franchise_names)
+            if report_text is None:
+                print(
+                    f"Bowl brackets\n\nStandings have {len(teams)} teams; expected 32."
+                )
+            else:
+                print(report_text)
+            print(
+                "(dry-run: toilet bowl and mid bowl from TYPE=standings; not posted)",
+                file=sys.stderr,
+            )
+            return 0
+
         if traded_2027_picks_report_only:
             league_json = await client.fetch_league()
             await client.sleep_between_exports()
@@ -2072,6 +2094,14 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--bowl-bracket-report",
+        action="store_true",
+        help=(
+            "With --dry-run, print the Toilet Bowl and Mid Bowl brackets "
+            "from current standings."
+        ),
+    )
+    parser.add_argument(
         "--traded-2027-picks-report",
         action="store_true",
         help=(
@@ -2125,6 +2155,7 @@ def main() -> None:
         args.active_roster_demote_report,
         args.top_scorers_report,
         args.traded_2027_picks_report,
+        args.bowl_bracket_report,
     )
     post_discord_flags = (
         args.post_roster_breakdown_discord,
@@ -2251,9 +2282,24 @@ def main() -> None:
             or args.roster_breakdown_report
             or args.roster_violations_report
             or args.traded_2027_picks_report
+            or args.bowl_bracket_report
         ):
             parser.error(
                 "--top-scorers-report cannot be combined with other report flags"
+            )
+        if args.bowl_bracket_report and (
+            args.last_trade
+            or args.with_dedupe
+            or args.top_traders
+            or args.draft_picks_report
+            or args.cap_space_report
+            or args.roster_breakdown_report
+            or args.roster_violations_report
+            or args.active_roster_demote_report
+            or args.traded_2027_picks_report
+        ):
+            parser.error(
+                "--bowl-bracket-report cannot be combined with other report flags"
             )
         raise SystemExit(
             asyncio.run(
@@ -2269,6 +2315,7 @@ def main() -> None:
                     active_roster_demote_report_only=args.active_roster_demote_report,
                     top_scorers_report_only=args.top_scorers_report,
                     traded_2027_picks_report_only=args.traded_2027_picks_report,
+                    bowl_bracket_report_only=args.bowl_bracket_report,
                 )
             )
         )
