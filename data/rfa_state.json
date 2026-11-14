@@ -1,11 +1,5 @@
 {
   "active_rfas": {
-    "13839": {
-      "cut_by_franchise_id": "0019",
-      "cut_by_name": "T-Town Tornados",
-      "cut_ts": 1794514381,
-      "last_salary": "14"
-    },
     "14210": {
       "cut_by_franchise_id": "0003",
       "cut_by_name": "Gibbs Me the Ring Precious",
@@ -14,7 +8,7 @@
     }
   },
   "last_rfa_weekly_week_key": "2026-W46",
-  "list_fingerprint": "073cdb85662b6d0f808c67dd509e4fd4e34b2a0b7b29fa5b0fd02fc9499d9f8d",
+  "list_fingerprint": "24d412b178fac58af07e12bc82a44faa5bb0881586dfad650aac66bdf86986c6",
   "roster_salary_snapshot": {
     "0001": {
       "0651": "85",
@@ -760,6 +754,7 @@
       "13693": "3",
       "13694": "1",
       "13772": "56",
+      "13839": "1",
       "14548": "6",
       "15398": "4",
       "15456": "1",
@@ -796,7 +791,6 @@
       "17635": "2",
       "17636": "3",
       "17641": "1",
-      "17688": "1",
       "17690": "1",
       "17696": "1",
       "17704": "1",
@@ -1615,6 +1609,7 @@
     }
   },
   "seen_invalid_claims": [
+    "INVALID_RFA|13839|0016|1794698312|1.0|14.0",
     "INVALID_RFA|14210|0003|1794455752|1.0|43.0"
   ]
 }
