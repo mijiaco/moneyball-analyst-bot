@@ -1,5 +1,11 @@
 {
   "active_rfas": {
+    "13839": {
+      "cut_by_franchise_id": "0016",
+      "cut_by_name": "The Butcher, The Tbone, The Bulls Ass",
+      "cut_ts": 1794514381,
+      "last_salary": "1"
+    },
     "14210": {
       "cut_by_franchise_id": "0003",
       "cut_by_name": "Gibbs Me the Ring Precious",
@@ -8,7 +14,7 @@
     }
   },
   "last_rfa_weekly_week_key": "2026-W46",
-  "list_fingerprint": "24d412b178fac58af07e12bc82a44faa5bb0881586dfad650aac66bdf86986c6",
+  "list_fingerprint": "b8fc0f357ad373b2a03fc8249ae3a5a4ef3b7d661b1c708e8ddcf4ef794507a2",
   "roster_salary_snapshot": {
     "0001": {
       "0651": "85",
@@ -754,7 +760,6 @@
       "13693": "3",
       "13694": "1",
       "13772": "56",
-      "13839": "1",
       "14548": "6",
       "15398": "4",
       "15456": "1",
@@ -792,6 +797,7 @@
       "17635": "2",
       "17636": "3",
       "17641": "1",
+      "17688": "1",
       "17690": "1",
       "17696": "1",
       "17704": "1",
