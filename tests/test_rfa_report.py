@@ -8,6 +8,7 @@ from src.google_sheets import (
     summary_rows_from_active,
 )
 from src.rfa_report import (
+    active_rfa_fingerprint,
     format_invalid_rfa_claim_text,
     format_rfa_report_text,
     invalid_claim_fingerprint,
@@ -146,16 +147,17 @@ def test_update_rfa_state_invalid_bbid_claim() -> None:
         ),
         now_ts=300,
     )
-    assert "15151" not in updated["active_rfas"]
-    assert changed is True
+    assert updated["active_rfas"]["15151"]["last_salary"] == "40"
+    assert updated["active_rfas"]["15151"]["cut_ts"] == 100
+    assert updated["active_rfas"]["15151"]["cut_by_franchise_id"] == "0001"
     assert len(invalid) == 1
     assert invalid[0].winning_bid == 15.0
     assert invalid[0].required_min == 40.0
     key = invalid_claim_fingerprint(invalid[0])
     assert key in updated["seen_invalid_claims"]
 
-    # Second pass should not re-emit the same invalid claim.
-    updated2, invalid2, _ = update_rfa_state(
+    # Second pass should not re-emit the same invalid claim or rewrite the row.
+    updated2, invalid2, changed2 = update_rfa_state(
         updated,
         top32_player_ids={"15151"},
         current_salaries_by_franchise={"0002": {"15151": "15"}},
@@ -174,7 +176,83 @@ def test_update_rfa_state_invalid_bbid_claim() -> None:
         now_ts=400,
     )
     assert invalid2 == []
-    assert "15151" not in updated2["active_rfas"]
+    assert changed2 is False
+    assert updated2["active_rfas"]["15151"]["last_salary"] == "40"
+    assert updated2["active_rfas"]["15151"]["cut_by_name"] == "Alpha"
+
+
+def test_reversed_dollar_pickup_does_not_rewrite_rfa_row() -> None:
+    state = {
+        "active_rfas": {
+            "14210": {
+                "last_salary": "43",
+                "cut_ts": 1794347829,
+                "cut_by_franchise_id": "0018",
+                "cut_by_name": "Chalupa Batmen",
+            }
+        },
+        "roster_salary_snapshot": {},
+        "highest_salary_by_player": {"14210": "43"},
+        "last_rfa_weekly_week_key": "",
+        "list_fingerprint": "",
+        "seen_invalid_claims": [],
+    }
+    state["list_fingerprint"] = active_rfa_fingerprint(state["active_rfas"])
+    claimed, invalid, changed = update_rfa_state(
+        state,
+        top32_player_ids={"14210"},
+        current_salaries_by_franchise={"0003": {"14210": "1"}},
+        franchise_names={"0003": "Gibbs Me the Ring Precious", "0018": "Chalupa Batmen"},
+        free_agent_moves=parse_free_agent_moves(
+            [
+                {
+                    "type": "FREE_AGENT",
+                    "franchise": "0003",
+                    "timestamp": "1794455752",
+                    "transaction": "14210,|",
+                }
+            ]
+        ),
+        bbid_claims=[],
+        players_map={"14210": "Pratt, Germaine IND LB"},
+        dropped_salary_rows=[("Pratt, Germaine IND LB", 1.0)],
+        now_ts=1794455800,
+    )
+    assert changed is False
+    assert len(invalid) == 1
+    assert invalid[0].winning_bid == 1.0
+    assert claimed["active_rfas"]["14210"]["cut_by_franchise_id"] == "0018"
+    assert claimed["active_rfas"]["14210"]["last_salary"] == "43"
+
+    reversed_state, invalid2, changed2 = update_rfa_state(
+        claimed,
+        top32_player_ids={"14210"},
+        current_salaries_by_franchise={},
+        franchise_names={"0003": "Gibbs Me the Ring Precious", "0018": "Chalupa Batmen"},
+        free_agent_moves=parse_free_agent_moves(
+            [
+                {
+                    "type": "FREE_AGENT",
+                    "franchise": "0003",
+                    "timestamp": "1794460361",
+                    "transaction": "|14210,",
+                }
+            ]
+        ),
+        bbid_claims=[],
+        players_map={"14210": "Pratt, Germaine IND LB"},
+        dropped_salary_rows=[
+            ("Pratt, Germaine IND LB", 43.0),
+            ("Pratt, Germaine IND LB", 1.0),
+        ],
+        now_ts=1794460400,
+    )
+    row = reversed_state["active_rfas"]["14210"]
+    assert changed2 is False
+    assert invalid2 == []
+    assert row["last_salary"] == "43"
+    assert row["cut_ts"] == 1794347829
+    assert row["cut_by_name"] == "Chalupa Batmen"
 
 
 def test_update_rfa_state_bootstrap_no_change() -> None:

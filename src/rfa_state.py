@@ -420,6 +420,11 @@ def update_rfa_state(
             add_ts = poll_ts
         if bid is not None:
             _maybe_invalid(player_id, franchise_id, add_ts, bid)
+        required = parse_salary_float(active[player_id].get("last_salary"))
+        # A claim under the restricted price is a false pickup. Leave the row
+        # in place so the reverse drop cannot rewrite the sheet.
+        if bid is not None and required is not None and bid < required:
+            continue
         del active[player_id]
 
     prev_fp = str(state.get("list_fingerprint") or "")
