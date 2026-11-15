@@ -92,6 +92,7 @@ from src.taxi_cut_report import (
     include_taxi_salary_percent,
     load_taxi_cut_state,
     non_taxi_roster_players_from_rosters,
+    parse_dropped_adjustment_details,
     parse_salary_adjustments,
     save_taxi_cut_state,
     taxi_cut_alert_fingerprint,
@@ -1166,6 +1167,15 @@ async def _async_main() -> int:
                     "BBID_WAIVER",
                     days=rfa_lookback_days,
                 )
+                await mfl.sleep_between_exports()
+                adjustments_json = await mfl.fetch_salary_adjustments()
+                dropped_salary_rows: list[tuple[str, float]] = []
+                for adjustment in parse_salary_adjustments(adjustments_json):
+                    parsed = parse_dropped_adjustment_details(adjustment.description)
+                    if parsed is None:
+                        continue
+                    label, salary, _years_left = parsed
+                    dropped_salary_rows.append((label, salary))
                 fa_moves = parse_free_agent_moves(fa_txs)
                 bbid_claims = parse_bbid_waiver_claims(bbid_txs)
                 updated_state, invalid_claims, list_changed = update_rfa_state(
@@ -1175,6 +1185,8 @@ async def _async_main() -> int:
                     franchise_names=franchise_names,
                     free_agent_moves=fa_moves,
                     bbid_claims=bbid_claims,
+                    players_map=players,
+                    dropped_salary_rows=dropped_salary_rows,
                 )
 
                 should_post_weekly = False

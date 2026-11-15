@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from src.google_sheets import parse_top32_player_ids_from_rows, rfa_sheet_rows_from_active
+from src.google_sheets import (
+    parse_top32_player_ids_from_rows,
+    rfa_sheet_rows_from_active,
+    summary_rows_from_active,
+)
 from src.rfa_report import (
     format_invalid_rfa_claim_text,
     format_rfa_report_text,
@@ -236,7 +240,49 @@ def test_format_rfa_report_text_includes_footer() -> None:
     assert "Player One NE QB" in text
     assert "$40" in text
     assert "cut by Alpha" in text
-    assert "last cut salary or higher" in text
+    assert "highest salary $40" in text
+    assert "highest salary or higher" in text
+    assert (
+        "Google Sheet: https://docs.google.com/spreadsheets/d/"
+        "1FfFa9KMovU-js9wLNTsCnWrRU9L_N4ESro9nKGjx8aM/edit"
+    ) in text
+
+
+def test_reversed_pickup_keeps_highest_dropped_salary() -> None:
+    state = {
+        "active_rfas": {
+            "14210": {
+                "last_salary": "1",
+                "cut_ts": 1794460361,
+                "cut_by_franchise_id": "0003",
+                "cut_by_name": "Gibbs Me the Ring Precious",
+            }
+        },
+        "roster_salary_snapshot": {},
+        "highest_salary_by_player": {"14210": "1"},
+        "last_rfa_weekly_week_key": "",
+        "list_fingerprint": "seed",
+        "seen_invalid_claims": [],
+    }
+    updated, _invalid, changed = update_rfa_state(
+        state,
+        top32_player_ids={"14210"},
+        current_salaries_by_franchise={},
+        franchise_names={"0003": "Gibbs Me the Ring Precious"},
+        free_agent_moves=[],
+        bbid_claims=[],
+        players_map={"14210": "Pratt, Germaine IND LB"},
+        dropped_salary_rows=[("Pratt, Germaine IND LB", 43.0)],
+        now_ts=1794460400,
+    )
+    assert changed is True
+    assert updated["active_rfas"]["14210"]["last_salary"] == "43"
+    text = format_rfa_report_text(
+        updated["active_rfas"],
+        {"14210": "Pratt, Germaine IND LB"},
+    )
+    assert "highest salary $43" in text
+    assert "last salary" not in text
 
 
 def test_format_rfa_report_empty() -> None:
@@ -340,3 +386,34 @@ def test_rfa_sheet_rows_from_active() -> None:
     assert rows[1][0] == "Player One"
     assert rows[1][1] == "15151"
     assert rows[1][-1] == "active"
+    assert rows[1][2] == "$40.00"
+    assert rows[1][5] == "$40.00"
+
+
+def test_summary_rows_use_highest_salary_and_top32_rank() -> None:
+    rows = summary_rows_from_active(
+        {
+            "14210": {
+                "last_salary": "43",
+                "cut_ts": 1794460361,
+                "cut_by_name": "Gibbs Me the Ring Precious",
+            }
+        },
+        {"14210": "Pratt, Germaine IND LB"},
+        [
+            ["Pos Salary Rank", "Position", "Player", "Salary", "Original MFL Team Name"],
+            ["21", "LB", "Pratt, Germaine IND LB", "$43.00", "Chalupa Batmen"],
+        ],
+    )
+    assert rows == [
+        [
+            "1",
+            "21",
+            "LB",
+            "Pratt, Germaine IND LB",
+            "$43.00",
+            "Chalupa Batmen",
+            "2026-11-12",
+            "$43.00",
+        ]
+    ]

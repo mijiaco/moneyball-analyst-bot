@@ -195,6 +195,7 @@ def _empty_rfa_state() -> dict[str, Any]:
     return {
         "active_rfas": {},
         "roster_salary_snapshot": {},
+        "highest_salary_by_player": {},
         "last_rfa_weekly_week_key": "",
         "list_fingerprint": "",
         "seen_invalid_claims": [],
@@ -219,9 +220,17 @@ def load_rfa_state(path: Path) -> dict[str, Any]:
     seen = raw.get("seen_invalid_claims")
     if not isinstance(seen, list):
         seen = []
+    highest_raw = raw.get("highest_salary_by_player")
+    if not isinstance(highest_raw, dict):
+        highest_raw = {}
     return {
         "active_rfas": {str(k): v for k, v in active.items() if isinstance(v, dict)},
         "roster_salary_snapshot": snapshot,
+        "highest_salary_by_player": {
+            str(player_id): str(salary)
+            for player_id, salary in highest_raw.items()
+            if str(salary).strip()
+        },
         "last_rfa_weekly_week_key": str(raw.get("last_rfa_weekly_week_key") or ""),
         "list_fingerprint": str(raw.get("list_fingerprint") or ""),
         "seen_invalid_claims": [str(x) for x in seen],
@@ -235,6 +244,44 @@ def save_rfa_state(path: Path, data: dict[str, Any]) -> None:
     os.replace(tmp, path)
 
 
+def _salary_text(value: float) -> str:
+    if float(value).is_integer():
+        return str(int(value))
+    return f"{value:g}"
+
+
+def _note_highest(highest: dict[str, float], player_id: str, raw: Any) -> None:
+    value = parse_salary_float(raw)
+    if value is None:
+        return
+    previous = highest.get(player_id)
+    if previous is None or value > previous:
+        highest[player_id] = value
+
+
+def dropped_salaries_by_player_id(
+    dropped_rows: list[tuple[str, float]],
+    players_map: dict[str, str],
+) -> dict[str, float]:
+    """Match drop-adjustment labels to one MFL player and keep the highest salary."""
+    ids_by_label: dict[str, list[str]] = {}
+    for player_id, label in players_map.items():
+        key = " ".join(str(label).casefold().split())
+        if key:
+            ids_by_label.setdefault(key, []).append(str(player_id))
+    out: dict[str, float] = {}
+    for label, salary in dropped_rows:
+        key = " ".join(str(label).casefold().split())
+        matches = ids_by_label.get(key) or []
+        if len(matches) != 1:
+            continue
+        player_id = matches[0]
+        previous = out.get(player_id)
+        if previous is None or salary > previous:
+            out[player_id] = salary
+    return out
+
+
 def update_rfa_state(
     state: dict[str, Any],
     *,
@@ -243,6 +290,8 @@ def update_rfa_state(
     franchise_names: dict[str, str],
     free_agent_moves: list[FreeAgentMove],
     bbid_claims: list[BbidWaiverClaim],
+    players_map: dict[str, str] | None = None,
+    dropped_salary_rows: list[tuple[str, float]] | None = None,
     now_ts: int | None = None,
 ) -> tuple[dict[str, Any], list[InvalidRfaClaim], bool]:
     """
@@ -263,6 +312,20 @@ def update_rfa_state(
         }
     )
     current_locations = flatten_roster_player_locations(current_salaries_by_franchise)
+    highest: dict[str, float] = {}
+    for player_id, raw_salary in (state.get("highest_salary_by_player") or {}).items():
+        _note_highest(highest, str(player_id), raw_salary)
+    for player_id, (_franchise_id, salary) in prev_locations.items():
+        _note_highest(highest, player_id, salary)
+    for player_id, (_franchise_id, salary) in current_locations.items():
+        _note_highest(highest, player_id, salary)
+    for player_id, entry in active.items():
+        _note_highest(highest, player_id, entry.get("last_salary"))
+    for player_id, salary in dropped_salaries_by_player_id(
+        dropped_salary_rows or [],
+        players_map or {},
+    ).items():
+        _note_highest(highest, player_id, salary)
 
     drop_ts_by_player: dict[str, tuple[int, str]] = {}
     for move in free_agent_moves:
@@ -280,12 +343,21 @@ def update_rfa_state(
         if player_id in active:
             continue
         cut_ts = drop_ts_by_player[player_id][0] if player_id in drop_ts_by_player else poll_ts
+        recorded_salary = highest.get(player_id)
         active[player_id] = {
-            "last_salary": salary,
+            "last_salary": (
+                _salary_text(recorded_salary) if recorded_salary is not None else salary
+            ),
             "cut_ts": cut_ts,
             "cut_by_franchise_id": franchise_id,
             "cut_by_name": franchise_names.get(franchise_id, f"Franchise {franchise_id}"),
         }
+
+    for player_id, entry in active.items():
+        recorded_salary = highest.get(player_id)
+        if recorded_salary is None:
+            continue
+        entry["last_salary"] = _salary_text(recorded_salary)
 
     invalid_claims: list[InvalidRfaClaim] = []
     seen_invalid = set(str(x) for x in (state.get("seen_invalid_claims") or []))
@@ -357,6 +429,10 @@ def update_rfa_state(
 
     updated = {
         "active_rfas": active,
+        "highest_salary_by_player": {
+            player_id: _salary_text(salary)
+            for player_id, salary in sorted(highest.items())
+        },
         "roster_salary_snapshot": {
             str(fid): {str(pid): str(sal) for pid, sal in players.items()}
             for fid, players in current_salaries_by_franchise.items()

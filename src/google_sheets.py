@@ -24,6 +24,10 @@ def spreadsheet_id_from_env() -> str:
     ).strip()
 
 
+def spreadsheet_url_from_env() -> str:
+    return f"https://docs.google.com/spreadsheets/d/{spreadsheet_id_from_env()}/edit"
+
+
 def top32_tab_from_env() -> str:
     return (os.environ.get("GOOGLE_SHEETS_TOP32_TAB") or DEFAULT_TOP32_TAB).strip()
 
@@ -290,12 +294,12 @@ def rfa_sheet_rows_from_active(
     active_rfas: dict[str, dict[str, Any]],
     players: dict[str, str],
 ) -> list[list[str]]:
-    from src.rfa_report import format_cut_date, format_money
+    from src.rfa_report import format_cut_date
 
     header = [
         "Player",
         "Player ID",
-        "Last Salary",
+        "Highest Salary",
         "Cut Date",
         "Cut By Team",
         "Restricted Bid",
@@ -312,14 +316,132 @@ def rfa_sheet_rows_from_active(
             [
                 players.get(player_id) or f"Player {player_id}",
                 str(player_id),
-                format_money(salary),
+                _sheet_money(salary),
                 format_cut_date(int(entry.get("cut_ts") or 0)),
                 str(entry.get("cut_by_name") or entry.get("cut_by_franchise_id") or ""),
-                format_money(salary),
+                _sheet_money(salary),
                 "active",
             ]
         )
     return [header, *body]
+
+
+def _sheet_money(raw: str) -> str:
+    from src.rfa_state import parse_salary_float
+
+    value = parse_salary_float(raw)
+    if value is None:
+        return str(raw or "")
+    return f"${value:,.2f}"
+
+
+def top32_details_by_player_id(
+    rows: list[list[Any]],
+    players_map: dict[str, str],
+) -> dict[str, dict[str, str]]:
+    """player id -> rank, position, sheet name, and original team from the Top 32 tab."""
+    found_header = _find_header_row(rows)
+    if found_header is None:
+        return {}
+    header_idx, header = found_header
+    indexes = _header_index_map(header)
+    name_col = None
+    for key in ("player", "playername", "name"):
+        if key in indexes:
+            name_col = indexes[key]
+            break
+    if name_col is None:
+        name_col = 0
+    position_col = indexes.get("position", indexes.get("pos"))
+    rank_col = indexes.get("possalaryrank")
+    team_col = indexes.get("originalmflteamname")
+    name_to_ids: dict[str, list[str]] = {}
+    for player_id, label in players_map.items():
+        for key in player_name_match_keys(label):
+            name_to_ids.setdefault(key, []).append(str(player_id))
+    details: dict[str, dict[str, str]] = {}
+    for row in rows[header_idx + 1 :]:
+        raw_name = _cell(row, name_col)
+        if not raw_name:
+            continue
+        matches = list(dict.fromkeys(name_to_ids.get(normalize_player_name(raw_name)) or []))
+        if not matches:
+            for key in player_name_match_keys(raw_name):
+                matches.extend(name_to_ids.get(key) or [])
+            matches = list(dict.fromkeys(matches))
+        if position_col is not None and len(matches) > 1:
+            position = _cell(row, position_col).upper()
+            narrowed = []
+            for player_id in matches:
+                label_parts = str(players_map.get(player_id) or "").split()
+                if label_parts and label_parts[-1].upper() == position:
+                    narrowed.append(player_id)
+            if narrowed:
+                matches = list(dict.fromkeys(narrowed))
+        if len(matches) != 1:
+            continue
+        details[matches[0]] = {
+            "rank": _cell(row, rank_col),
+            "position": _cell(row, position_col),
+            "player": raw_name,
+            "original_team": _cell(row, team_col),
+        }
+    return details
+
+
+def summary_rows_from_active(
+    active_rfas: dict[str, dict[str, Any]],
+    players: dict[str, str],
+    top32_rows: list[list[Any]],
+) -> list[list[str]]:
+    """Data rows for Summary List, starting under the existing header."""
+    from src.rfa_report import format_cut_date
+
+    details = top32_details_by_player_id(top32_rows, players)
+    rows: list[list[str]] = []
+    ordered = sorted(
+        active_rfas.keys(),
+        key=lambda pid: (players.get(pid) or pid).lower(),
+    )
+    for index, player_id in enumerate(ordered, start=1):
+        entry = active_rfas[player_id]
+        info = details.get(str(player_id)) or {}
+        salary = _sheet_money(str(entry.get("last_salary") or ""))
+        rows.append(
+            [
+                str(index),
+                str(info.get("rank") or ""),
+                str(info.get("position") or ""),
+                str(info.get("player") or players.get(player_id) or f"Player {player_id}"),
+                salary,
+                str(info.get("original_team") or ""),
+                format_cut_date(int(entry.get("cut_ts") or 0)),
+                salary,
+            ]
+        )
+    return rows
+
+
+def write_summary_list_rows(
+    service: Any,
+    spreadsheet_id: str,
+    rows: list[list[str]],
+    *,
+    tab_title: str = "Summary List",
+) -> None:
+    """Replace Summary List data under the how-to text and header. Leaves rows 1–4."""
+    service.spreadsheets().values().clear(
+        spreadsheetId=spreadsheet_id,
+        range=f"'{tab_title}'!A5:H",
+    ).execute()
+    if not rows:
+        return
+    service.spreadsheets().values().update(
+        spreadsheetId=spreadsheet_id,
+        range=f"'{tab_title}'!A5",
+        valueInputOption="RAW",
+        body={"values": rows},
+    ).execute()
 
 
 def fetch_top32_player_ids(
@@ -358,4 +480,14 @@ def sync_rfa_sheet(
     tab = rfa_tab_from_env()
     rows = rfa_sheet_rows_from_active(active_rfas, players)
     write_rfa_report_rows(service, spreadsheet_id, tab, rows)
+    top_rows = read_sheet_values(
+        service,
+        spreadsheet_id,
+        f"'{top32_tab_from_env()}'!A:Z",
+    )
+    write_summary_list_rows(
+        service,
+        spreadsheet_id,
+        summary_rows_from_active(active_rfas, players, top_rows),
+    )
     return True

@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from src.google_sheets import spreadsheet_url_from_env
 from src.rfa_state import (
     BbidWaiverClaim,
     FreeAgentMove,
@@ -75,7 +76,7 @@ def format_rfa_report_text(
         "The following players had top 32 salaries and have restricted waiver wire salaries:"
     )
     footer = (
-        "If you bid on a player on the list above, you need to bid the last cut salary or higher."
+        "If you bid on a player on the list above, you need to bid the highest salary or higher."
     )
     lines: list[str] = []
     if as_of_line:
@@ -95,9 +96,13 @@ def format_rfa_report_text(
             salary = format_money(entry.get("last_salary") or "?")
             cut_date = format_cut_date(int(entry.get("cut_ts") or 0))
             team = str(entry.get("cut_by_name") or entry.get("cut_by_franchise_id") or "?")
-            lines.append(f"* {label} — last salary {salary} — cut {cut_date} — cut by {team}")
+            lines.append(
+                f"* {label} — highest salary {salary} — cut {cut_date} — cut by {team}"
+            )
     lines.append("")
     lines.append(footer)
+    lines.append("")
+    lines.append(f"Google Sheet: {spreadsheet_url_from_env()}")
     return "\n".join(lines)
 
 
@@ -119,7 +124,7 @@ def format_invalid_rfa_claim_text(
             "",
             f"* Winning team: {winner}",
             f"* Winning bid: {format_money(claim.winning_bid)}",
-            f"* Required minimum (last cut salary): {format_money(claim.required_min)}",
+            f"* Required minimum (highest salary): {format_money(claim.required_min)}",
             f"* Originally cut by: {cutter} on {cut_date}",
         ]
     )
