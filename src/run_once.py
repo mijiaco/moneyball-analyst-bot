@@ -1175,7 +1175,9 @@ async def _async_main() -> int:
                     if parsed is None:
                         continue
                     label, salary, _years_left = parsed
-                    dropped_salary_rows.append((label, salary))
+                    dropped_salary_rows.append(
+                        (label, salary, adjustment.franchise_id, adjustment.timestamp)
+                    )
                 fa_moves = parse_free_agent_moves(fa_txs)
                 bbid_claims = parse_bbid_waiver_claims(bbid_txs)
                 updated_state, invalid_claims, list_changed = update_rfa_state(

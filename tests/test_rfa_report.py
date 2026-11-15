@@ -255,6 +255,65 @@ def test_reversed_dollar_pickup_does_not_rewrite_rfa_row() -> None:
     assert row["cut_by_name"] == "Chalupa Batmen"
 
 
+def test_reversed_pickup_lists_prior_owner() -> None:
+    state = {
+        "active_rfas": {
+            "14210": {
+                "last_salary": "43",
+                "cut_ts": 1794460361,
+                "cut_by_franchise_id": "0003",
+                "cut_by_name": "Gibbs Me the Ring Precious",
+            },
+            "13839": {
+                "last_salary": "14",
+                "cut_ts": 1794514381,
+                "cut_by_franchise_id": "0016",
+                "cut_by_name": "The Butcher, The Tbone, The Bulls Ass",
+            },
+        },
+        "roster_salary_snapshot": {},
+        "highest_salary_by_player": {"14210": "43", "13839": "14"},
+        "last_rfa_weekly_week_key": "",
+        "list_fingerprint": "seed",
+        "seen_invalid_claims": [],
+    }
+    names = {
+        "0003": "Gibbs Me the Ring Precious",
+        "0016": "The Butcher, The Tbone, The Bulls Ass",
+        "0018": "The Purple Curtain",
+        "0019": "T-Town Tornados",
+    }
+    players = {
+        "14210": "Pratt, Germaine IND LB",
+        "13839": "Sieler, Zach MIA DT",
+    }
+    updated, _invalid, changed = update_rfa_state(
+        state,
+        top32_player_ids={"14210", "13839"},
+        current_salaries_by_franchise={},
+        franchise_names=names,
+        free_agent_moves=[],
+        bbid_claims=[],
+        players_map=players,
+        dropped_salary_rows=[
+            ("Pratt, Germaine IND LB", 43.0, "0018", 1794347829),
+            ("Pratt, Germaine IND LB", 1.0, "0003", 1794460361),
+            ("Sieler, Zach MIA DT", 14.0, "0019", 1794514381),
+        ],
+        now_ts=1794700000,
+    )
+    assert changed is True
+    pratt = updated["active_rfas"]["14210"]
+    sieler = updated["active_rfas"]["13839"]
+    assert pratt["cut_by_name"] == "The Purple Curtain"
+    assert pratt["cut_by_franchise_id"] == "0018"
+    assert pratt["cut_ts"] == 1794347829
+    assert pratt["last_salary"] == "43"
+    assert sieler["cut_by_name"] == "T-Town Tornados"
+    assert sieler["cut_by_franchise_id"] == "0019"
+    assert sieler["last_salary"] == "14"
+
+
 def test_update_rfa_state_bootstrap_no_change() -> None:
     state = {
         "active_rfas": {},
@@ -474,7 +533,7 @@ def test_summary_rows_use_highest_salary_and_top32_rank() -> None:
             "14210": {
                 "last_salary": "43",
                 "cut_ts": 1794460361,
-                "cut_by_name": "Gibbs Me the Ring Precious",
+                "cut_by_name": "The Purple Curtain",
             }
         },
         {"14210": "Pratt, Germaine IND LB"},
@@ -490,7 +549,7 @@ def test_summary_rows_use_highest_salary_and_top32_rank() -> None:
             "LB",
             "Pratt, Germaine IND LB",
             "$43.00",
-            "Chalupa Batmen",
+            "The Purple Curtain",
             "2026-11-12",
             "$43.00",
         ]

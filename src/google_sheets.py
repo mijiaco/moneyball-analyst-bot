@@ -414,7 +414,7 @@ def summary_rows_from_active(
                 str(info.get("position") or ""),
                 str(info.get("player") or players.get(player_id) or f"Player {player_id}"),
                 salary,
-                str(info.get("original_team") or ""),
+                str(entry.get("cut_by_name") or info.get("original_team") or ""),
                 format_cut_date(int(entry.get("cut_ts") or 0)),
                 salary,
             ]
