@@ -1,15 +1,15 @@
 {
   "active_rfas": {
     "13839": {
-      "cut_by_franchise_id": "0016",
-      "cut_by_name": "The Butcher, The Tbone, The Bulls Ass",
+      "cut_by_franchise_id": "0019",
+      "cut_by_name": "T-Town Tornados",
       "cut_ts": 1794514381,
       "last_salary": "14"
     },
     "14210": {
-      "cut_by_franchise_id": "0003",
-      "cut_by_name": "Gibbs Me the Ring Precious",
-      "cut_ts": 1794460361,
+      "cut_by_franchise_id": "0018",
+      "cut_by_name": "The Purple Curtain",
+      "cut_ts": 1794347829,
       "last_salary": "43"
     }
   },
@@ -1599,7 +1599,7 @@
     "9051": "3"
   },
   "last_rfa_weekly_week_key": "2026-W46",
-  "list_fingerprint": "a2c3df6ee874c23a73ea1e831a54704ca1f29fc1a635799958a7a8b05d7dcb46",
+  "list_fingerprint": "af3f56ec69221902237295b6499cb1f09129d2c819c356de1362152b408851e2",
   "roster_salary_snapshot": {
     "0001": {
       "0651": "85",
