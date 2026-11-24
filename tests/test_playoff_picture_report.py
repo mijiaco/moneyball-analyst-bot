@@ -58,9 +58,10 @@ def test_seeds_follow_division_winners_then_record_then_points() -> None:
     assert seeded[-1].seed == 12
 
     text = format_playoff_picture_text(seeded, names)
-    assert text.splitlines()[2] == " 1. W0 — 8-0-0 — 100.00 — first-round bye"
-    assert "12. POINTS — 0-8-0 — 900.00" in text
-    assert text.splitlines()[-1] == "12. POINTS — 0-8-0 — 900.00"
+    assert "• 1 W0 — 8-0-0 — 100.00" in text
+    assert "• 5 R6 vs 12 POINTS" in text
+    assert "• 8 R3 vs 9 R2" in text
+    assert "Week 15" not in text
     assert "Mid Bowl" not in text
     assert "Toilet Bowl" not in text
 

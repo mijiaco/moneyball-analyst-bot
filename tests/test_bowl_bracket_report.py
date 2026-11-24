@@ -86,10 +86,99 @@ def test_points_against_does_not_change_seed() -> None:
 
 def test_equal_points_for_keeps_points_against_from_breaking_the_tie() -> None:
     names = {"0001": "Alpha", "0002": "Zulu"}
+    teams = [
+        _team(f"{index:04d}", 10, 1, 5000 - index, points_against=index)
+        for index in range(3, 15)
+    ]
+    for team in teams:
+        names[team.franchise_id] = f"Playoff {team.franchise_id}"
     alpha = _team("0001", 5, 4, 100, points_against=900)
     zulu = _team("0002", 5, 4, 100, points_against=1)
-    seeded = seed_bowl_field([zulu, alpha], names)
-    assert [row.team.franchise_id for row in seeded] == ["0001", "0002"]
+    seeded = seed_bowl_field([zulu, alpha, *teams], names)
+    leftover_ids = [row.team.franchise_id for row in seeded if row.seed >= 13]
+    assert leftover_ids[:2] == ["0001", "0002"]
+
+
+def test_playoff_points_seed_is_not_in_the_mid_bowl() -> None:
+    """A 6-5 team with the most points left is seed 12, not a Mid Bowl seed."""
+    names: dict[str, str] = {}
+    teams: list[PlayoffTeam] = []
+    for index, division in enumerate(("01", "02", "03", "04"), start=1):
+        franchise_id = f"{index:04d}"
+        names[franchise_id] = f"Division {division}"
+        teams.append(
+            PlayoffTeam(
+                franchise_id=franchise_id,
+                division_id=division,
+                points_for=2000 - index,
+                points_against=100,
+                wins=10,
+                losses=1,
+                ties=0,
+            )
+        )
+    for index in range(5, 12):
+        franchise_id = f"{index:04d}"
+        names[franchise_id] = f"Wild {index}"
+        teams.append(
+            PlayoffTeam(
+                franchise_id=franchise_id,
+                division_id="01",
+                points_for=1900 - index,
+                points_against=100,
+                wins=9,
+                losses=2,
+                ties=0,
+            )
+        )
+    for index, points in ((13, 1500.0), (14, 1490.0)):
+        franchise_id = f"{index:04d}"
+        names[franchise_id] = f"Eight Win {index}"
+        teams.append(
+            PlayoffTeam(
+                franchise_id=franchise_id,
+                division_id="02",
+                points_for=points,
+                points_against=100 if index == 13 else 1,
+                wins=8,
+                losses=3,
+                ties=0,
+            )
+        )
+    names["0012"] = "Brute Force & Ignorance"
+    teams.append(
+        PlayoffTeam(
+            franchise_id="0012",
+            division_id="03",
+            points_for=2869.97,
+            points_against=50,
+            wins=6,
+            losses=5,
+            ties=0,
+        )
+    )
+    for index in range(15, 33):
+        franchise_id = f"{index:04d}"
+        names[franchise_id] = f"Rest {index}"
+        teams.append(
+            PlayoffTeam(
+                franchise_id=franchise_id,
+                division_id="04",
+                points_for=1000 - index,
+                points_against=index,
+                wins=4,
+                losses=7,
+                ties=0,
+            )
+        )
+    seeded = seed_bowl_field(teams, names)
+    by_seed = {row.seed: row.team.franchise_id for row in seeded}
+    assert by_seed[12] == "0012"
+    assert "0012" not in {by_seed[seed] for seed in range(13, 25)}
+    assert [by_seed[13], by_seed[14]] == ["0013", "0014"]
+    text = format_bowl_bracket_text(teams, names, completed_week=11)
+    assert text is not None
+    assert "Brute Force & Ignorance" not in text
 
 
 def test_week_9_bracket_matches_the_reference_snapshot() -> None:
@@ -102,15 +191,15 @@ def test_week_9_bracket_matches_the_reference_snapshot() -> None:
     assert "The field is not set until after Week 13." in text
     assert "Winner gets the 1.33 rookie pick." in text
     assert "Winner gets the 2.33 rookie pick." in text
-    assert "25 Sal Paradiso vs 32 VC KILLER WHALES" in text
-    assert "26 Bad Connection vs 31 Joker" in text
-    assert "27 Blackout Blitz vs 30 Harley Quinn" in text
-    assert "28 Cascade Wrecking Crew vs 29 The Purple Curtain" in text
-    assert (
-        "Byes: 13 BavAIRian FC, 14 Shough the Falcons, "
-        "15 Brute Force & Ignorance, 16 Daly City French Bulldogs"
-    ) in text
-    assert "17 Isn't That John Candy? vs 24 Gibbs Me the Ring Precious" in text
+    assert "• 25 Sal Paradiso vs 32 VC KILLER WHALES" in text
+    assert "• 26 Bad Connection vs 31 Joker" in text
+    assert "• 27 Blackout Blitz vs 30 Harley Quinn" in text
+    assert "• 28 Cascade Wrecking Crew vs 29 The Purple Curtain" in text
+    assert "• 13 BavAIRian FC" in text
+    assert "• 14 Shough the Falcons" in text
+    assert "• 15 Brute Force & Ignorance" in text
+    assert "• 16 Daly City French Bulldogs" in text
+    assert "• 17 Isn't That John Candy? vs 24 Gibbs Me the Ring Precious" in text
     assert "18 T-Town Tornados vs 23 Stripes and Scales" in text
     assert "19 The Lord of the TD's vs 22 Greatest Sheaux On Turf" in text
     assert "20 Mathis City Mayhem vs 21 Chalupa Batmen" in text

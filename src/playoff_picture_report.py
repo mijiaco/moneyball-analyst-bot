@@ -10,6 +10,8 @@ PLAYOFF_PICTURE_COLOR = 2123412  # navy
 FIRST_ROUND_BYE_COUNT = 4
 PLAYOFF_FIELD_SIZE = 12
 RECORD_SEED_END = 11
+REGULAR_SEASON_WEEKS = 13
+WILD_CARD_SEED_START = 5
 
 
 @dataclass(frozen=True)
@@ -206,19 +208,58 @@ def seed_playoff_picture(
     ]
 
 
+def _team_line(row: SeededPlayoffTeam, franchise_names: dict[str, str]) -> str:
+    team = row.team
+    return (
+        f"{row.seed} {_team_name(team.franchise_id, franchise_names)} "
+        f"— {team.record} — {team.points_for:.2f}"
+    )
+
+
+def _field_status_line(seeded: list[SeededPlayoffTeam]) -> str:
+    completed_week = min(row.team.games for row in seeded)
+    weeks_left = max(0, REGULAR_SEASON_WEEKS - max(0, completed_week))
+    week_word = "week" if weeks_left == 1 else "weeks"
+    if completed_week <= 0:
+        through = "No completed week yet."
+    else:
+        through = f"Through Week {completed_week}."
+    if weeks_left:
+        remaining = f"{weeks_left} regular-season {week_word} left."
+    else:
+        remaining = "No regular-season weeks left."
+    if completed_week < REGULAR_SEASON_WEEKS:
+        field = "The field is not set until after Week 13."
+    else:
+        field = "The field is set."
+    return f"{through} {remaining} {field}"
+
+
 def format_playoff_picture_text(
     seeded: list[SeededPlayoffTeam],
     franchise_names: dict[str, str],
     *,
     title: str = PLAYOFF_PICTURE_TITLE,
 ) -> str:
+    """
+    Seeds 1-4 are Week 14 byes. Seeds 5-12 are the Week 14 games, high seed vs low seed.
+    Later rounds reseed, so this does not print a Week 15 or Week 16 pairing.
+    """
     if not seeded:
         return f"{title}\n\nNo standings found."
-    lines = [title, ""]
-    for row in seeded:
-        bye_note = " — first-round bye" if row.has_first_round_bye else ""
+    byes = [row for row in seeded if row.has_first_round_bye]
+    wild_cards = [row for row in seeded if row.seed >= WILD_CARD_SEED_START]
+    half = len(wild_cards) // 2
+    lines = [title, "", _field_status_line(seeded), "", "Byes"]
+    lines.extend(f"• {_team_line(row, franchise_names)}" for row in byes)
+    lines.extend(["", "Week 14. Later rounds reseed.", ""])
+    for index in range(half):
+        if index:
+            lines.append("")
+        high = wild_cards[index]
+        low = wild_cards[-1 - index]
         lines.append(
-            f"{row.seed:>2}. {_team_name(row.team.franchise_id, franchise_names)} "
-            f"— {row.team.record} — {row.team.points_for:.2f}{bye_note}"
+            f"• {high.seed} {_team_name(high.team.franchise_id, franchise_names)} vs "
+            f"{low.seed} {_team_name(low.team.franchise_id, franchise_names)}"
         )
     return "\n".join(lines)

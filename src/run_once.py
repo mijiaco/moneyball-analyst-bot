@@ -245,12 +245,12 @@ def _is_weekly_reports_due(now_et: datetime) -> bool:
     return now_et.weekday() == 5 and now_et.hour >= 15
 
 
-# 3:00 AM Central = 4:00 AM Eastern (CT stays one hour behind ET).
-_POINTS_LEADERBOARD_DUE_ET = (4, 0)
+# 12:05 AM Central = 1:05 AM Eastern (CT stays one hour behind ET).
+_POINTS_LEADERBOARD_DUE_ET = (1, 5)
 
 
 def _is_points_leaderboard_due(now_et: datetime) -> bool:
-    """Tuesday at/after 3:00 AM Central."""
+    """Tuesday at/after 12:05 AM Central."""
     return now_et.weekday() == 1 and (now_et.hour, now_et.minute) >= (
         _POINTS_LEADERBOARD_DUE_ET
     )

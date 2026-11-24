@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from src.playoff_picture_report import PlayoffTeam
+from src.playoff_picture_report import PlayoffTeam, seed_playoff_picture
 
 BOWL_BRACKET_TITLE = "Weekly Toilet Bowl / Mid Bowl"
 BOWL_BRACKET_COLOR = 10053324  # brown
@@ -61,10 +61,23 @@ def seed_bowl_field(
     teams: list[PlayoffTeam],
     franchise_names: dict[str, str],
 ) -> list[SeededBowlTeam]:
-    """Seeds 1-32 by record, with points for as the only tiebreaker."""
-    ordered = sorted(
-        teams, key=lambda team: _record_points_sort_key(team, franchise_names)
+    """
+    Seeds 1-12 are the playoff picture, including the points seed at 12.
+    Seeds 13-32 are the teams left out, by record then points for.
+    Points against does not reorder those leftover teams.
+    """
+    playoff_ids = [
+        row.team.franchise_id
+        for row in seed_playoff_picture(teams, franchise_names)
+    ]
+    playoff_id_set = set(playoff_ids)
+    by_id = {team.franchise_id: team for team in teams}
+    playoff_teams = [by_id[franchise_id] for franchise_id in playoff_ids if franchise_id in by_id]
+    leftovers = sorted(
+        (team for team in teams if team.franchise_id not in playoff_id_set),
+        key=lambda team: _record_points_sort_key(team, franchise_names),
     )
+    ordered = [*playoff_teams, *leftovers]
     return [
         SeededBowlTeam(seed=index, team=team)
         for index, team in enumerate(ordered, start=1)
@@ -93,7 +106,7 @@ def _matchup_line(
     franchise_names: dict[str, str],
 ) -> str:
     return (
-        f"{left.seed} {_team_name(left.team.franchise_id, franchise_names)} vs "
+        f"• {left.seed} {_team_name(left.team.franchise_id, franchise_names)} vs "
         f"{right.seed} {_team_name(right.team.franchise_id, franchise_names)}"
     )
 
@@ -149,32 +162,29 @@ def format_bowl_bracket_text(
         _field_status_line(week),
         "",
         "Toilet Bowl",
-        (
-            "Week 14 quarterfinals. Winner gets the "
-            f"{TOILET_PRIZE}. Week 15 semifinals reseed; Week 16 final."
-        ),
+        f"Week 14 quarterfinals. Winner gets the {TOILET_PRIZE}.",
+        "Week 15 semifinals reseed. Week 16 final.",
+        "",
     ]
-    lines.extend(
-        _matchup_line(left, right, franchise_names)
-        for left, right in _high_low_pairs(toilet)
-    )
-    bye_text = ", ".join(
-        f"{row.seed} {_team_name(row.team.franchise_id, franchise_names)}"
-        for row in byes
-    )
+    for index, (left, right) in enumerate(_high_low_pairs(toilet)):
+        if index:
+            lines.append("")
+        lines.append(_matchup_line(left, right, franchise_names))
     lines.extend(
         [
             "",
             "Mid Bowl",
-            (
-                "Week 14 first round. Seeds 13–16 have byes. Winner gets the "
-                f"{MID_PRIZE}."
-            ),
-            f"Byes: {bye_text}",
+            f"Week 14 first round. Winner gets the {MID_PRIZE}.",
+            "Byes",
         ]
     )
     lines.extend(
-        _matchup_line(left, right, franchise_names)
-        for left, right in _high_low_pairs(first_round)
+        f"• {row.seed} {_team_name(row.team.franchise_id, franchise_names)}"
+        for row in byes
     )
+    lines.extend(["Week 14", ""])
+    for index, (left, right) in enumerate(_high_low_pairs(first_round)):
+        if index:
+            lines.append("")
+        lines.append(_matchup_line(left, right, franchise_names))
     return "\n".join(lines)
